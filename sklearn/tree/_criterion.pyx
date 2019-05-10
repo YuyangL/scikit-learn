@@ -30,6 +30,9 @@ from ._utils cimport log
 from ._utils cimport safe_realloc
 from ._utils cimport sizet_ptr_to_ndarray
 from ._utils cimport WeightedMedianCalculator
+# Least-squares of Ax = b with nogil capability
+# from .direct_blas_lapack cimport dgelss
+cimport scipy.linalg.cython_lapack as cython_lapack
 
 cdef class Criterion:
     """Interface for impurity criteria.
@@ -54,6 +57,7 @@ cdef class Criterion:
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end) nogil except -1:
+        # TODO: necessary to make sure init() here and init() in RegressionCriterion has same signatures?
         """Placeholder for a method which will initialize the criterion.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
@@ -200,9 +204,9 @@ cdef class Criterion:
         self.children_impurity(&impurity_left, &impurity_right)
 
         return ((self.weighted_n_node_samples / self.weighted_n_samples) *
-                (impurity - (self.weighted_n_right / 
+                (impurity - (self.weighted_n_right /
                              self.weighted_n_node_samples * impurity_right)
-                          - (self.weighted_n_left / 
+                          - (self.weighted_n_left /
                              self.weighted_n_node_samples * impurity_left)))
 
 
@@ -723,25 +727,67 @@ cdef class RegressionCriterion(Criterion):
         self.sum_total = NULL
         self.sum_left = NULL
         self.sum_right = NULL
+        # TODO: dealloc?
+        # Sum of T, T^T*T as well as T^T*bij, fixed dimension no matter how many samples
+        self.sum_tb, self.sum_tb_tb, self.sum_tb_bij = NULL, NULL, NULL
+        # Outputs of least-squares fit of Ax = b dgelss()
+        # Singular value of A in decreasing order
+        # On exit, if ls_info = 0, ls_work(1) returns the optimal ls_lwork
+        self.ls_s, self.ls_work = NULL, NULL
 
         # Allocate memory for the accumulators
+        # In tensor basis case, this is the sum of reconstructed bij_hat = T*g at each subset sample
         self.sum_total = <double*> calloc(n_outputs, sizeof(double))
         self.sum_left = <double*> calloc(n_outputs, sizeof(double))
         self.sum_right = <double*> calloc(n_outputs, sizeof(double))
+        # Allocate sum of T, T^T*T as well as T^T*bij, summation over points,
+        # represented by 1D flattened array of memory addresses
+        # TODO: these need to have variable length if RegressionChain were to be used, something like y.shape[1]
+        # T is 9 components x 10 bases
+        self.sum_tb = <double*> calloc(90, sizeof(double))
+        # T^T*T is 10 bases x 10 bases
+        self.sum_tb_tb = <double*> calloc(100, sizeof(double))
+        # T^T*bij is 10 bases x 1
+        self.sum_tb_bij = <double*> calloc(10, sizeof(double))
+        # dgelss() least-squares fit of Ax = b related outputs
+        # Dimension min(A's row, A's col)
+        self.ls_s = <double*> calloc(10, sizeof(double))
+        # Dimension max(1, ls_lwork). ls_lwork is calculated as
+        # min(row, col)*3 + max(max(row, col), min(row, col)*2),
+        # in this case, 10*3 + 10*2 = 50
+        self.ls_work = <double*> calloc(50, sizeof(double))
 
-        if (self.sum_total == NULL or 
+        if (self.sum_total == NULL or
                 self.sum_left == NULL or
                 self.sum_right == NULL):
             raise MemoryError()
+
+    def __dealloc__(self):
+        """Destructor. Mimicking what's done in ClassificationCriterion"""
+        # Deallocate sum of T, T^T*T, and T^T*bij
+        free(self.sum_tb)
+        free(self.sum_tb_tb)
+        free(self.sum_tb_bij)
+        # Deallocate S and work array used in dgelss least-squares fit of Ax = b
+        free(self.ls_s)
+        free(self.ls_work)
 
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
 
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
-                  SIZE_t end) nogil except -1:
+                  SIZE_t end,
+                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) \
+            nogil except -1:
+        # TODO: pointer for tb, tb_tb and tb_bij?
         """Initialize the criterion at node samples[start:end] and
-           children samples[start:start] and samples[start:end]."""
+           children samples[start:start] and samples[start:end].
+        T is n_samples x 9 components x 10 bases.
+        T^T*T is n_samples x 10 bases x 10 bases.
+        T^T*bij is n_samples x 10 bases.
+        ::1 means C-contiguous
+        """
         # Initialize fields
         self.y = y
         self.sample_weight = sample_weight
@@ -751,6 +797,11 @@ cdef class RegressionCriterion(Criterion):
         self.n_node_samples = end - start
         self.weighted_n_samples = weighted_n_samples
         self.weighted_n_node_samples = 0.
+        # Extra initialization of T, T^T*T, and T^T*bij
+        # so that g = (T^T*T)^(-1)*(T^T*bij)
+        self.tb, self.tb_tb, self.tb_bij = tb, tb_tb, tb_bij
+        # On or off flag for tensor basis mode
+        self.tb_mode = 1 if (tb != None and tb_tb != None and tb_bij != None) else 0
 
         cdef SIZE_t i
         cdef SIZE_t p
@@ -761,17 +812,91 @@ cdef class RegressionCriterion(Criterion):
 
         self.sq_sum_total = 0.0
         memset(self.sum_total, 0, self.n_outputs * sizeof(double))
+        # Initialize the memory block of sum_tb, sum_tb_tb and sum_tb_bij to 0
+        memset(self.sum_tb, 0, 90*sizeof(double))
+        memset(self.sum_tb_tb, 0, 100*sizeof(double))
+        memset(self.sum_tb_bij, 0, 10*sizeof(double))
+
+        # TODO: Not sure if what's the point of this?
+        # sum_tb_tb points to value self.sum_tb_tb,
+        # TODO: if sum_tb_tb is changed, then self.sum_tb_tb is changed too?
+        # On the other hand, if cdef DOUBLE_t* sum_tb_tb = &self.sum_tb_tb,
+        # then it points to self.sum_tb_tb's address
+        cdef DOUBLE_t* sum_tb_tb = self.sum_tb_tb
+        cdef DOUBLE_t* sum_tb_bij = self.sum_tb_bij
+
+        # If in tensor basis mode, calculate sum_total (a.k.a. y_hat) by
+        # g = (T^T*T)^(-1)*(T^T*bij),
+        # sum_total = bij_hat = T*g
+        if self.tb_mode:
+            cdef int i_row, i_col
+            # Go through each row of T, T^T*T and T^T*bij
+            for i_row in range(10):
+                # Sum(T^T*T) is 10 bases x 10 bases, since it's C-contiguous,
+                # go through each row and at each row go through each column
+                for i_col in range(10):
+                    # From start to end of this sample subset, sum all samples' T, T^T*T
+                    for p in range(start, end):
+                        # Get actual sample index
+                        i = samples[p]
+                        # Calculate T summed over this subset of samples
+                        # Since T is n_samples x 9 components x 10 bases, i_row should be 0 - 8
+                        if i_row < 9:
+                            self.sum_tb[i_row*10 + i_col] += tb[i, i_row, i_col]
+
+                        # Calculate T.T*T summed over this subset of samples
+                        # TODO: should sum_tb_tb be self.sum_tb_tb instead?
+                        # Next row is current row * 10 since 10 columns (basis)
+                        sum_tb_tb[i_row*10 + i_col] += tb_tb[i, i_row, i_col]
+
+            # Do the same for samples' T^T*bij in this sample subset, go through each row
+            for i_row in range(10):
+                for p in range(start, end):
+                    i = samples[p]
+                    # TODO: should sum_tb_bij be self.sum_tb_bij instead?
+                    sum_tb_bij[i_row] += tb_bij[i, i_row]
+
+            # Least-squares fit with dgelss() to derive g from T^T*g = T^T*b
+            # The solution of 10 g in contained in sum_tb_bij after cython_lapack.dgelss
+            cdef int rank, info
+            cdef int lwork = 50
+            # TODO: self.sum_tb_tb or sum_tb_tb?
+            # TODO: explain 13 args
+            cython_lapack.dgelss(10, 10, 1,
+                                 sum_tb_tb, 10, sum_tb_bij, 10,
+                                 self.ls_s, -1, &rank,
+                                 self.ls_work, &lwork, &info)
+            # Calculate reconstructed bij_hat from T and g
+            # First calculate T summed over this subset of samples
+            # Each tensor basis' corresponding g
+            cdef DOUBLE_t g_j
+            # Manual dot product by aggregating each column (basis) in each row (component)
+            for i_row in range(9):
+                for i_col in range(10):
+                    # As mentioned, solution of 10 g is contained in sum_tb_bij after dgelss()
+                    g_j = sum_tb_bij[i_col]
+                    # After looping through all columns (basis) at each row (component),
+                    # that bij component is derived and stored in sum_total
+                    # TODO: trim sum_total's dimension to match n_outputs for RegressionChain, could either remove
+                    #  learned components here or already reduce row number during T_reduced*g_reduced = bij_reduced
+                    self.sum_total[i_row] += self.sum_tb[i_row, i_col]*g_j
 
         for p in range(start, end):
             i = samples[p]
 
-            if sample_weight != NULL:
+            # Doesn't make sense for tensor basis mode to have custom weights at this moment
+            if sample_weight != NULL and not self.tb_mode:
                 w = sample_weight[i]
 
             for k in range(self.n_outputs):
                 y_ik = self.y[i, k]
                 w_y_ik = w * y_ik
-                self.sum_total[k] += w_y_ik
+                # If not in tensor basis mode, then calculate sum_total (a.k.a. y_hat) as usual
+                if not self.tb_mode:
+                    self.sum_total[k] += w_y_ik
+
+                # In tensor basis case, this is
+                # sum((every bij component at every sample in this subset)^2)
                 self.sq_sum_total += w_y_ik * y_ik
 
             self.weighted_n_node_samples += w
@@ -808,6 +933,9 @@ cdef class RegressionCriterion(Criterion):
         cdef double* sum_left = self.sum_left
         cdef double* sum_right = self.sum_right
         cdef double* sum_total = self.sum_total
+        # tb_mode points to the value of self.tb_mode
+        # TODO: is this necessary?
+        cdef int* tb_mode = self.tb_mode
 
         cdef double* sample_weight = self.sample_weight
         cdef SIZE_t* samples = self.samples
@@ -1251,7 +1379,7 @@ cdef class MAE(RegressionCriterion):
                     w = sample_weight[i]
 
                 impurity_left += fabs(self.y[i, k] - median) * w
-        p_impurity_left[0] = impurity_left / (self.weighted_n_left * 
+        p_impurity_left[0] = impurity_left / (self.weighted_n_left *
                                               self.n_outputs)
 
         for k in range(self.n_outputs):
@@ -1263,7 +1391,7 @@ cdef class MAE(RegressionCriterion):
                     w = sample_weight[i]
 
                 impurity_right += fabs(self.y[i, k] - median) * w
-        p_impurity_right[0] = impurity_right / (self.weighted_n_right * 
+        p_impurity_right[0] = impurity_right / (self.weighted_n_right *
                                                 self.n_outputs)
 
 
