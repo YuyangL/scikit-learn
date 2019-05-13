@@ -727,28 +727,36 @@ cdef class RegressionCriterion(Criterion):
         self.sum_total = NULL
         self.sum_left = NULL
         self.sum_right = NULL
-        # TODO: dealloc?
-        # Sum of T, T^T*T as well as T^T*bij, fixed dimension no matter how many samples
-        self.sum_tb, self.sum_tb_tb, self.sum_tb_bij = NULL, NULL, NULL
+        # Sum of T, T^T*T (in C- and Fortran-contiguous format), T^T*bij, g, and reconstructed bij_hat
+        # over samples from start to end index
+        self.sum_tb, self.sum_tb_tb, self.sum_tb_tb_fortran, self.sum_tb_bij, self.sum_g, self.sum_bij_hat = \
+            NULL, NULL, NULL, NULL, NULL, NULL
         # Outputs of least-squares fit of Ax = b dgelss()
         # Singular value of A in decreasing order
         # On exit, if ls_info = 0, ls_work(1) returns the optimal ls_lwork
         self.ls_s, self.ls_work = NULL, NULL
+        # Sum of T in left and right bin in update()
+        self.sum_tb_left, self.sum_tb_right = NULL, NULL
 
         # Allocate memory for the accumulators
-        # In tensor basis case, this is the sum of reconstructed bij_hat = T*g at each subset sample
+        # In tensor basis case, this is the sum of reconstructed bij_hat = T*g over samples from start to end index
         self.sum_total = <double*> calloc(n_outputs, sizeof(double))
         self.sum_left = <double*> calloc(n_outputs, sizeof(double))
         self.sum_right = <double*> calloc(n_outputs, sizeof(double))
-        # Allocate sum of T, T^T*T as well as T^T*bij, summation over points,
+        # Allocate sum of T, T^T*T, T^T*bij, g, and bij_hat over samples from start to end index,
         # represented by 1D flattened array of memory addresses
         # TODO: these need to have variable length if RegressionChain were to be used, something like y.shape[1]
         # T is 9 components x 10 bases
         self.sum_tb = <double*> calloc(90, sizeof(double))
-        # T^T*T is 10 bases x 10 bases
+        # T^T*T is 10 bases x 10 bases for both C- and Fortran-contiguous format
         self.sum_tb_tb = <double*> calloc(100, sizeof(double))
+        self.sum_tb_tb_fortran = <double*> calloc(100, sizeof(double))
         # T^T*bij is 10 bases x 1
         self.sum_tb_bij = <double*> calloc(10, sizeof(double))
+        # g is 10 bases x 1
+        self.sum_g = <double*> calloc(10, sizeof(double))
+        # bij_hat is 9 components x 1
+        self.sum_bij_hat = <double*> calloc(9, sizeof(double))
         # dgelss() least-squares fit of Ax = b related outputs
         # Dimension min(A's row, A's col)
         self.ls_s = <double*> calloc(10, sizeof(double))
@@ -756,6 +764,9 @@ cdef class RegressionCriterion(Criterion):
         # min(row, col)*3 + max(max(row, col), min(row, col)*2),
         # in this case, 10*3 + 10*2 = 50
         self.ls_work = <double*> calloc(50, sizeof(double))
+        # Dimension 9 x 1 for both sum of T in left and right bin in update()
+        self.sum_tb_left = <double*> calloc(9, sizeof(double))
+        self.sum_tb_right = <double*> calloc(9, sizeof(double))
 
         if (self.sum_total == NULL or
                 self.sum_left == NULL or
@@ -763,11 +774,17 @@ cdef class RegressionCriterion(Criterion):
             raise MemoryError()
 
     def __dealloc__(self):
-        """Destructor. Mimicking what's done in ClassificationCriterion"""
-        # Deallocate sum of T, T^T*T, and T^T*bij
+        """Destructor. Additional destruction of newly introduced tensor basis arrays"""
+        # Deallocate sum of T, T^T*T, T^T*bij, g, and bij_hat over samples from start to end index
         free(self.sum_tb)
         free(self.sum_tb_tb)
+        free(self.sum_tb_tb_fortran)
         free(self.sum_tb_bij)
+        free(self.sum_g)
+        free(self.sum_bij_hat)
+        # Also deallocate sum of T in left and right bin in update()
+        free(self.sum_tb_left)
+        free(self.sum_tb_right)
         # Deallocate S and work array used in dgelss least-squares fit of Ax = b
         free(self.ls_s)
         free(self.ls_work)
@@ -812,74 +829,16 @@ cdef class RegressionCriterion(Criterion):
 
         self.sq_sum_total = 0.0
         memset(self.sum_total, 0, self.n_outputs * sizeof(double))
-        # Initialize the memory block of sum_tb, sum_tb_tb and sum_tb_bij to 0
-        memset(self.sum_tb, 0, 90*sizeof(double))
-        memset(self.sum_tb_tb, 0, 100*sizeof(double))
-        memset(self.sum_tb_bij, 0, 10*sizeof(double))
 
-        # TODO: Not sure if what's the point of this?
-        # sum_tb_tb points to value self.sum_tb_tb,
-        # TODO: if sum_tb_tb is changed, then self.sum_tb_tb is changed too?
-        # On the other hand, if cdef DOUBLE_t* sum_tb_tb = &self.sum_tb_tb,
-        # then it points to self.sum_tb_tb's address
-        cdef DOUBLE_t* sum_tb_tb = self.sum_tb_tb
-        cdef DOUBLE_t* sum_tb_bij = self.sum_tb_bij
-
-        # If in tensor basis mode, calculate sum_total (a.k.a. y_hat) by
-        # g = (T^T*T)^(-1)*(T^T*bij),
-        # sum_total = bij_hat = T*g
         if self.tb_mode:
-            cdef int i_row, i_col
-            # Go through each row of T, T^T*T and T^T*bij
-            for i_row in range(10):
-                # Sum(T^T*T) is 10 bases x 10 bases, since it's C-contiguous,
-                # go through each row and at each row go through each column
-                for i_col in range(10):
-                    # From start to end of this sample subset, sum all samples' T, T^T*T
-                    for p in range(start, end):
-                        # Get actual sample index
-                        i = samples[p]
-                        # Calculate T summed over this subset of samples
-                        # Since T is n_samples x 9 components x 10 bases, i_row should be 0 - 8
-                        if i_row < 9:
-                            self.sum_tb[i_row*10 + i_col] += tb[i, i_row, i_col]
-
-                        # Calculate T.T*T summed over this subset of samples
-                        # TODO: should sum_tb_tb be self.sum_tb_tb instead?
-                        # Next row is current row * 10 since 10 columns (basis)
-                        sum_tb_tb[i_row*10 + i_col] += tb_tb[i, i_row, i_col]
-
-            # Do the same for samples' T^T*bij in this sample subset, go through each row
-            for i_row in range(10):
-                for p in range(start, end):
-                    i = samples[p]
-                    # TODO: should sum_tb_bij be self.sum_tb_bij instead?
-                    sum_tb_bij[i_row] += tb_bij[i, i_row]
-
-            # Least-squares fit with dgelss() to derive g from T^T*g = T^T*b
-            # The solution of 10 g in contained in sum_tb_bij after cython_lapack.dgelss
-            cdef int rank, info
-            cdef int lwork = 50
-            # TODO: self.sum_tb_tb or sum_tb_tb?
-            # TODO: explain 13 args
-            cython_lapack.dgelss(10, 10, 1,
-                                 sum_tb_tb, 10, sum_tb_bij, 10,
-                                 self.ls_s, -1, &rank,
-                                 self.ls_work, &lwork, &info)
-            # Calculate reconstructed bij_hat from T and g
-            # First calculate T summed over this subset of samples
-            # Each tensor basis' corresponding g
-            cdef DOUBLE_t g_j
-            # Manual dot product by aggregating each column (basis) in each row (component)
-            for i_row in range(9):
-                for i_col in range(10):
-                    # As mentioned, solution of 10 g is contained in sum_tb_bij after dgelss()
-                    g_j = sum_tb_bij[i_col]
-                    # After looping through all columns (basis) at each row (component),
-                    # that bij component is derived and stored in sum_total
-                    # TODO: trim sum_total's dimension to match n_outputs for RegressionChain, could either remove
-                    #  learned components here or already reduce row number during T_reduced*g_reduced = bij_reduced
-                    self.sum_total[i_row] += self.sum_tb[i_row, i_col]*g_j
+            # Calculate sum_total, i.e. bij_hat for samples from start to end index,
+            # results are stored in self.sum_bij_hat, and g stored in self.sum_g
+            _ = self.reconstructAnisotropyTensor(start, end)
+            # Then assign self.sum_bij_hat to self.sum_total
+            # This loop is RegressionChain compatible
+            # as it only uses the last n_outputs (not necessarily 9) results of sum_bij_hat
+            for k in range(self.n_outputs):
+                self.sum_total[k] = self.sum_bij_hat[9 - self.n_outputs + k]
 
         for p in range(start, end):
             i = samples[p]
@@ -887,6 +846,8 @@ cdef class RegressionCriterion(Criterion):
             # Doesn't make sense for tensor basis mode to have custom weights at this moment
             if sample_weight != NULL and not self.tb_mode:
                 w = sample_weight[i]
+            else:
+                w = 1.0
 
             for k in range(self.n_outputs):
                 y_ik = self.y[i, k]
@@ -903,6 +864,95 @@ cdef class RegressionCriterion(Criterion):
 
         # Reset to pos=start
         self.reset()
+        return 0
+
+    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir = 1) nogil except -1:
+        """Reconstruct the total anistropy tensor bij_hat contributed by samples in the index list of samples[
+        pos1:pos2] with specified direction.
+        First, evaluate 10 tensor basis coefficients g, by solving the under-determined linear system of
+        (T^T*T)*g = (T^T*bij), dimensionally [10 x 10] x [10 x 1] = [10 x 1].
+        Second, compute the reconstructed bij_hat using
+        sum(bij_hat) = sum(T*g), summed over samples from pos1 to pos2, dimensionally [9 x 1] = [9 x 10] x [10 x 1].
+        sum(bij_hat) is equivalently sum_total/sum_left/sum_right."""
+        # Initialize the memory blocks of sum_tb, sum_tb_tb, sum_tb_tb_fortran, sum_tb_bij, and sum_bij_hat to 0
+        memset(self.sum_tb, 0, 90*sizeof(double))
+        memset(self.sum_tb_tb, 0, 100*sizeof(double))
+        memset(self.sum_tb_tb_fortran, 0, 100*sizeof(double))
+        memset(self.sum_tb_bij, 0, 10*sizeof(double))
+        memset(self.sum_bij_hat, 0, 9*sizeof(double))
+
+        # Tensor basis matrices summed over samples from pos1 to pos2.
+        # sum_tb_tb points to the address self.sum_tb_tb.
+        # However, ptr[i] will point to the value at ith address in val.
+        cdef DOUBLE_t* sum_tb = self.sum_tb
+        cdef DOUBLE_t* sum_tb_tb = self.sum_tb_tb
+        cdef DOUBLE_t* sum_tb_tb_fortran = self.sum_tb_tb_fortran
+        cdef DOUBLE_t* sum_tb_bij = self.sum_tb_bij
+        cdef DOUBLE_t* sum_g = self.sum_g
+        cdef DOUBLE_t* sum_bij_hat = self.sum_bij_hat
+        # Inputs from RegressionCriterion.init()
+        cdef DOUBLE_t* samples = self.samples
+        cdef DOUBLE_t* tb = self.tb
+        cdef DOUBLE_t* tb_tb = self.tb_tb
+        cdef DOUBLE_t* tb_bij = self.tb_bij
+        cdef SIZE_t i1, i2, p, i
+        # Least-squares fit related variables
+        cdef int rank, info
+        cdef int lwork = 50
+
+        # Loop through 1st and 2nd dimension of a matrix
+        # Depending on C- or Fortran-contiguous format, i1/i2 could mean row/column or column/row
+        for i1 in range(10):
+            for i2 in range(10):
+                # Calculate T and T^T*T in both C- and Fortran-contiguous format
+                # summed over samples from pos1 to pos2
+                # FIXME: if dir = -1, then operation should be -= instead +=
+                for p in range(pos1, pos2, dir):
+                    # Actual index of samples
+                    i = samples[p]
+                    # Since T is n_samples x 9 components x 10 bases,
+                    # i1 is row (component), i2 is column (basis) of tb and i1 is 0 - 8
+                    if i1 < 9:
+                        sum_tb[i1*10 + i2] += tb[i, i1, i2]
+
+                    # i1 is row (basis), i2 is column (basis) of tb_tb
+                    sum_tb_tb[i1*10 + i2] += tb_tb[i, i1, i2]
+                    # On the other hand, Fortran-contiguous sum_tb_tb_fortran store matrix in memory column (basis) wise
+                    # Hence i1 is column (basis), i2 is row (basis) of tb_tb
+                    sum_tb_tb_fortran[i1*10 + i2] += tb_tb[i, i2, i1]
+
+            # Calculate T^T*bij summed over samples from pos1 to pos2
+            # Since tb_bij is 1D at each point, it's both C and Fortran-contiguous
+            # FIXME: if dir = -1, then operation should be -= instead +=
+            for p in range(pos1, pos2, dir):
+                i = samples[p]
+                sum_tb_bij[i1] += tb_bij[i, i1]
+
+        # Least-squares fit with dgelss() to solve g from T^T*g = T^T*bij
+        # The solution of 10 g is contained in sum_tb_bij after cython_lapack.dgelss
+        # Note that dgelss() is written in Fortran thus every matrix needs to be Fortran-contiguous
+        # TODO: explain 13 args
+        cython_lapack.dgelss(10, 10, 1,
+                             sum_tb_tb_fortran, 10, sum_tb_bij, 10,
+                             self.ls_s, -1, &rank,
+                             self.ls_work, &lwork, &info)
+         # Solution of 10 g is contained in sum_tb_bij after dgelss(), so go through each basis and get sum_g
+        for i2 in range(10):
+            sum_g[i2] = sum_tb_bij[i2]
+
+        # Calculate reconstructed bij_hat from T and g.
+        # Manual dot product by aggregating each column (basis) in each row (component).
+        # i1 is RegressionChain compatible since number of rows is tied to number of outputs.
+        # E.g. 4/9 outputs learned then only output 4, 5, 6, 7, 8 left to train
+        # sum_bij_hat[0], sum_bij_hat[4] will be sum_tb[5], sum_tb[8]
+        for i1 in range(self.n_outputs):
+            for i2 in range(10):
+                # After looping through all columns (basis) at each row (component),
+                # the reconstructed bij component is obtained and stored in sum_bij_hat
+                # TODO: trim sum_total's dimension to match n_outputs for RegressionChain, could either remove
+                #  learned components here or already reduce row number during T_reduced*g_reduced = bij_reduced
+                sum_bij_hat[i1] += sum_tb[(9 - self.n_outputs + i1)*10 + i2]*sum_g[i2]
+
         return 0
 
     cdef int reset(self) nogil except -1:
@@ -929,13 +979,18 @@ cdef class RegressionCriterion(Criterion):
 
     cdef int update(self, SIZE_t new_pos) nogil except -1:
         """Updated statistics by moving samples[pos:new_pos] to the left."""
+        # Initialize sum of T in left and right bin to 0 every time update() is called as they have "+=" operation
+        memset(self.sum_tb_left, 0, 9*sizeof(double))
+        memset(self.sum_tb_right, 0, 9*sizeof(double))
 
         cdef double* sum_left = self.sum_left
         cdef double* sum_right = self.sum_right
         cdef double* sum_total = self.sum_total
-        # tb_mode points to the value of self.tb_mode
-        # TODO: is this necessary?
-        cdef int* tb_mode = self.tb_mode
+        # Tensor basis related arrays
+        cdef double* tb = self.tb
+        cdef double* sum_tb_left = self.sum_tb_left
+        cdef double* sum_tb_right = self.sum_tb_right
+        cdef double* sum_g = self.sum_g
 
         cdef double* sample_weight = self.sample_weight
         cdef SIZE_t* samples = self.samples
@@ -946,6 +1001,7 @@ cdef class RegressionCriterion(Criterion):
         cdef SIZE_t p
         cdef SIZE_t k
         cdef DOUBLE_t w = 1.0
+        cdef SIZE_t i1, i2
 
         # Update statistics up to new_pos
         #
@@ -956,27 +1012,71 @@ cdef class RegressionCriterion(Criterion):
         # of computations, i.e. from pos to new_pos or from end to new_pos.
 
         if (new_pos - pos) <= (end - new_pos):
+
+            if self.tb_mode:
+                # TODO: do I calculate a new set of g from pos to new_pos or use old g from start to end?
+                # Calculate sum of T_left over samples from pos to new_pos index
+                # For each component (row), go through each basis (column)
+                for i1 in range(9):
+                    for i2 in range(10):
+                        for p in range(pos, new_pos):
+                            i = samples[p]
+                            sum_tb_left[i1*10 + i2] += tb[i, i1, i2]
+
+                # For RegressionChain compatibility, start a new loop
+                # with number of components tied to number of outputs
+                for k in range(self.n_outputs):
+                    for i2 in range(10):
+                        # Reconstruct bij_hat_left, i.e. sum_left from sum_tb_left and sum_g
+                        # (sum_g was derived from samples from start to end index)
+                        sum_left[k] += sum_tb_left[(9 - self.n_outputs + k)*10 + i2]*sum_g[i2]
+
             for p in range(pos, new_pos):
                 i = samples[p]
 
-                if sample_weight != NULL:
+                # Sample weights only make sense if not in tensor basis mode, at the moment
+                if sample_weight != NULL and not self.tb_mode:
                     w = sample_weight[i]
+                else:
+                    w = 1.0
 
-                for k in range(self.n_outputs):
-                    sum_left[k] += w * self.y[i, k]
+                # Calculate sum_left as usual if not in tensor basis mode
+                if not self.tb_mode:
+                    for k in range(self.n_outputs):
+                        sum_left[k] += w * self.y[i, k]
 
                 self.weighted_n_left += w
+        # Else if calculating from new_pos to end is easier than from pos to new_pos
         else:
+            # reverse_reset() sets sum_left to sum_total
             self.reverse_reset()
+            if self.tb_mode:
+                # Do the same as the above reset but go from new_pos to end index
+                for i1 in range(9):
+                    for i2 in range(10):
+                        for p in range(new_pos, end):
+                            i = samples[p]
+                            # Sum of T for samples from new_pos to end, equivalent to sum_tb_right, as it is easier
+                            sum_tb_right[i1*10 + i2] += tb[i, i1, i2]
+
+                for k in range(self.n_outputs):
+                    for i2 in range(10):
+                        # Unlike previous reset, sum_left has been preset to sum_total,
+                        # thus remove sum_tb_right from sum_tb_total
+                        sum_left[k] -= sum_tb_right[(9 - self.n_outputs + k)*10 + i2]*sum_g[i2]
 
             for p in range(end - 1, new_pos - 1, -1):
                 i = samples[p]
 
-                if sample_weight != NULL:
+                # Disable sample weight for tensor basis mode
+                if sample_weight != NULL and not self.tb_mode:
                     w = sample_weight[i]
+                else:
+                    w = 1.0
 
-                for k in range(self.n_outputs):
-                    sum_left[k] -= w * self.y[i, k]
+                if not self.tb_mode:
+                    for k in range(self.n_outputs):
+                        sum_left[k] -= w * self.y[i, k]
 
                 self.weighted_n_left -= w
 
