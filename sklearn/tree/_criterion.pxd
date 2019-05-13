@@ -25,6 +25,9 @@ cdef class Criterion:
 
     # Internal structures
     cdef const DOUBLE_t[:, ::1] y        # Values of y
+    # Tensor inputs definition
+    cdef DOUBLE_t[:, :, ::1] tb, tb_tb
+    cdef DOUBLE_t[:, :, ::1] tb_bij
     cdef DOUBLE_t* sample_weight         # Sample weights
 
     cdef SIZE_t* samples                 # Sample indices in X, y
@@ -52,9 +55,11 @@ cdef class Criterion:
     # statistics correspond to samples[start:pos] and samples[pos:end].
 
     # Methods
+    # Added signature of tb, tb_tb, and tb_bij
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
-                  SIZE_t end) nogil except -1
+                  SIZE_t end,
+                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) nogil except -1
     cdef int reset(self) nogil except -1
     cdef int reverse_reset(self) nogil except -1
     cdef int update(self, SIZE_t new_pos) nogil except -1
@@ -75,3 +80,13 @@ cdef class RegressionCriterion(Criterion):
     """Abstract regression criterion."""
 
     cdef double sq_sum_total
+    # Tensor basis related definition
+    # TODO: why pointer here?
+    cdef double* sum_tb, sum_tb_tb, sum_tb_tb_fortran, sum_tb_bji, sum_g, sum_bij_hat
+    # dgelss() related definition
+    cdef double* ls_s, ls_work
+    # Definition of arrays in update()
+    cdef double* sum_tb_left, sum_tb_right
+
+    # Additional function to reconstruct anisotropy tensors
+    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir = 1) nogil except -1

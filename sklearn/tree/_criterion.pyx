@@ -56,7 +56,8 @@ cdef class Criterion:
 
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
-                  SIZE_t end) nogil except -1:
+                  SIZE_t end,
+                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) nogil except -1:
         # TODO: necessary to make sure init() here and init() in RegressionCriterion has same signatures?
         """Placeholder for a method which will initialize the criterion.
 
@@ -78,7 +79,9 @@ cdef class Criterion:
             The first sample to be used on this node
         end : SIZE_t
             The last sample used on this node
-
+        tb:
+        tb_tb:
+        tb_bij:
         """
 
         pass
@@ -282,7 +285,8 @@ cdef class ClassificationCriterion(Criterion):
 
     cdef int init(self, const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight, double weighted_n_samples,
-                  SIZE_t* samples, SIZE_t start, SIZE_t end) nogil except -1:
+                  SIZE_t* samples, SIZE_t start, SIZE_t end,
+                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
         children samples[start:start] and samples[start:end].
 
@@ -1251,7 +1255,9 @@ cdef class MAE(RegressionCriterion):
 
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
-                  SIZE_t end) nogil except -1:
+                  SIZE_t end,
+                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) nogil except -1:
+        # TODO: tensor basis calculations for MAE
         """Initialize the criterion at node samples[start:end] and
            children samples[start:start] and samples[start:end]."""
 
