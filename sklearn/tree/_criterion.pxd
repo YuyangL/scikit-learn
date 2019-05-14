@@ -82,12 +82,20 @@ cdef class RegressionCriterion(Criterion):
 
     cdef double sq_sum_total
     # Tensor basis related definition
+    # Each pointer has to be declared separately
     # TODO: why pointer here?
-    cdef double* sum_tb, sum_tb_tb, sum_tb_tb_fortran, sum_tb_bji, sum_g, sum_bij_hat
+    cdef double* sum_tb
+    cdef double* sum_tb_tb
+    cdef double* sum_tb_tb_fortran
+    cdef double* sum_tb_bji
+    cdef double* sum_g
+    cdef double* sum_bij_hat
     # dgelss() related definition
-    cdef double* ls_s, ls_work
+    cdef double* ls_s
+    cdef double* ls_work
     # Definition of arrays in update()
-    cdef double* sum_tb_left, sum_tb_right
+    cdef double* sum_tb_left
+    cdef double* sum_tb_right
 
     # Additional function to reconstruct anisotropy tensors
     cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir = *) nogil except -1
