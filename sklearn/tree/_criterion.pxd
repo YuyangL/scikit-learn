@@ -25,9 +25,9 @@ cdef class Criterion:
 
     # Internal structures
     cdef const DOUBLE_t[:, ::1] y        # Values of y
-    # Tensor inputs definition
-    cdef DOUBLE_t[:, :, ::1] tb, tb_tb
-    cdef DOUBLE_t[:, :, ::1] tb_bij
+    # Tensor inputs declaration
+    cdef const DOUBLE_t[:, :, ::1] tb, tb_tb
+    cdef const DOUBLE_t[:, ::1] tb_bij
     cdef DOUBLE_t* sample_weight         # Sample weights
 
     cdef SIZE_t* samples                 # Sample indices in X, y
@@ -81,16 +81,17 @@ cdef class RegressionCriterion(Criterion):
     """Abstract regression criterion."""
 
     cdef double sq_sum_total
-    # Tensor basis related definition
+    # Tensor basis related declaration
+    cdef int tb_mode
     # Each pointer has to be declared separately
     # TODO: why pointer here?
     cdef double* sum_tb
     cdef double* sum_tb_tb
     cdef double* sum_tb_tb_fortran
-    cdef double* sum_tb_bji
+    cdef double* sum_tb_bij
     cdef double* sum_g
     cdef double* sum_bij_hat
-    # dgelss() related definition
+    # dgelss() related declaration
     cdef double* ls_s
     cdef double* ls_work
     # Definition of arrays in update()

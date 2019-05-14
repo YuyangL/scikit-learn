@@ -735,6 +735,12 @@ cdef class RegressionCriterion(Criterion):
         # over samples from start to end index
         self.sum_tb, self.sum_tb_tb, self.sum_tb_tb_fortran, self.sum_tb_bij, self.sum_g, self.sum_bij_hat = \
             NULL, NULL, NULL, NULL, NULL, NULL
+        # self.sum_tb = NULL
+        # self.sum_tb_tb = NULL
+        # self.sum_tb_tb_fortran = NULL
+        # self.sum_tb_bij = NULL
+        # self.sum_g = NULL
+        # self.sum_bij_hat = NULL
         # Outputs of least-squares fit of Ax = b dgelss()
         # Singular value of A in decreasing order
         # On exit, if ls_info = 0, ls_work(1) returns the optimal ls_lwork
@@ -821,6 +827,9 @@ cdef class RegressionCriterion(Criterion):
         # Extra initialization of T, T^T*T, and T^T*bij
         # so that g = (T^T*T)^(-1)*(T^T*bij)
         self.tb, self.tb_tb, self.tb_bij = tb, tb_tb, tb_bij
+        # self.tb = tb
+        # self.tb_tb = tb_tb
+        # self.tb_bij = tb_bij
         # On or off flag for tensor basis mode
         self.tb_mode = 1 if (tb != None and tb_tb != None and tb_bij != None) else 0
 
@@ -895,14 +904,23 @@ cdef class RegressionCriterion(Criterion):
         cdef DOUBLE_t* sum_g = self.sum_g
         cdef DOUBLE_t* sum_bij_hat = self.sum_bij_hat
         # Inputs from RegressionCriterion.init()
-        cdef DOUBLE_t* samples = self.samples
+        cdef SIZE_t* samples = self.samples
+        # FIXME: maybe don't use tb, tb_tb, tb_bij and directly use self.~?
         cdef DOUBLE_t* tb = self.tb
         cdef DOUBLE_t* tb_tb = self.tb_tb
         cdef DOUBLE_t* tb_bij = self.tb_bij
         cdef SIZE_t i1, i2, p, i
         # Least-squares fit related variables
+        cdef int row = 10
+        cdef int col = 10
+        cdef int nrhs = 1
+        cdef int lda = row
+        cdef int ldb = row
+        cdef DOUBLE_t rcond = -1
         cdef int rank, info
         cdef int lwork = 50
+        # Assigning each element of T, T^^*T and T^T*bij to variable
+        cdef DOUBLE_t tb_pi1i2, tb_tb_pi1i2, tb_tb_pi2i1, tb_bij_pi1
 
         # Loop through 1st and 2nd dimension of a matrix
         # Depending on C- or Fortran-contiguous format, i1/i2 could mean row/column or column/row
@@ -910,35 +928,42 @@ cdef class RegressionCriterion(Criterion):
             for i2 in range(10):
                 # Calculate T and T^T*T in both C- and Fortran-contiguous format
                 # summed over samples from pos1 to pos2
+                # FIXME: specifying range order dir causes error:
+                #  "Converting to Python object not allowed without gil"
                 # FIXME: if dir = -1, then operation should be -= instead +=
-                for p in range(pos1, pos2, dir):
+                for p in range(pos1, pos2):
                     # Actual index of samples
                     i = samples[p]
+                    tb_pi1i2, tb_tb_pi1i2, tb_tb_bi2i1 = \
+                        tb[i, i1, i2], tb_tb[i, i1, i2], tb_tb[i, i2, i1]
                     # Since T is n_samples x 9 components x 10 bases,
                     # i1 is row (component), i2 is column (basis) of tb and i1 is 0 - 8
                     if i1 < 9:
-                        sum_tb[i1*10 + i2] += tb[i, i1, i2]
+                        # FIXME: maybe use tb_ii1i2 = tb[i, i1, i2] then +=?
+                        sum_tb[i1*10 + i2] += tb_pi1i2
 
                     # i1 is row (basis), i2 is column (basis) of tb_tb
-                    sum_tb_tb[i1*10 + i2] += tb_tb[i, i1, i2]
+                    sum_tb_tb[i1*10 + i2] += tb_tb_pi1i2
                     # On the other hand, Fortran-contiguous sum_tb_tb_fortran store matrix in memory column (basis) wise
                     # Hence i1 is column (basis), i2 is row (basis) of tb_tb
-                    sum_tb_tb_fortran[i1*10 + i2] += tb_tb[i, i2, i1]
+                    sum_tb_tb_fortran[i1*10 + i2] += tb_tb_pi2i1
 
             # Calculate T^T*bij summed over samples from pos1 to pos2
             # Since tb_bij is 1D at each point, it's both C and Fortran-contiguous
             # FIXME: if dir = -1, then operation should be -= instead +=
-            for p in range(pos1, pos2, dir):
+            for p in range(pos1, pos2):
                 i = samples[p]
-                sum_tb_bij[i1] += tb_bij[i, i1]
+                tb_bij_pi1 = tb_bij[i, i1]
+                sum_tb_bij[i1] += tb_bij_pi1
 
         # Least-squares fit with dgelss() to solve g from T^T*g = T^T*bij
         # The solution of 10 g is contained in sum_tb_bij after cython_lapack.dgelss
         # Note that dgelss() is written in Fortran thus every matrix needs to be Fortran-contiguous
         # TODO: explain 13 args
-        cython_lapack.dgelss(10, 10, 1,
-                             sum_tb_tb_fortran, 10, sum_tb_bij, 10,
-                             self.ls_s, -1, &rank,
+        # FIXME: "Cannot assign type 'long' to 'int *'" error
+        cython_lapack.dgelss(&row, &col, &nrhs,
+                             sum_tb_tb_fortran, &lda, sum_tb_bij, &ldb,
+                             self.ls_s, &rcond, &rank,
                              self.ls_work, &lwork, &info)
          # Solution of 10 g is contained in sum_tb_bij after dgelss(), so go through each basis and get sum_g
         for i2 in range(10):
@@ -1006,6 +1031,7 @@ cdef class RegressionCriterion(Criterion):
         cdef SIZE_t k
         cdef DOUBLE_t w = 1.0
         cdef SIZE_t i1, i2
+        # cdef DOUBLE_t tb_pi1i2
 
         # Update statistics up to new_pos
         #
