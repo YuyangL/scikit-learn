@@ -59,7 +59,8 @@ cdef class Criterion:
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) nogil except -1
+                  DOUBLE_t[:, :, ::1] tb = *, DOUBLE_t[:, :, ::1] tb_tb = *, DOUBLE_t[:, ::1]tb_bij = *) nogil \
+            except -1
     cdef int reset(self) nogil except -1
     cdef int reverse_reset(self) nogil except -1
     cdef int update(self, SIZE_t new_pos) nogil except -1
@@ -89,4 +90,4 @@ cdef class RegressionCriterion(Criterion):
     cdef double* sum_tb_left, sum_tb_right
 
     # Additional function to reconstruct anisotropy tensors
-    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir = 1) nogil except -1
+    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir = *) nogil except -1
