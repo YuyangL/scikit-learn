@@ -97,6 +97,10 @@ cdef class RegressionCriterion(Criterion):
     # Definition of arrays in update()
     cdef double* sum_tb_left
     cdef double* sum_tb_right
+    # Declaration of signatures of reconstructAnisotropyTensor()
+    # TODO: pos1 and pos2 necessary since they're declared in cdef int reconstructAnisotropyTensor anyway?
+    cdef SIZE_t pos1, pos2
+    cdef int dir
 
     # Additional function to reconstruct anisotropy tensors
     cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir = *) nogil except -1

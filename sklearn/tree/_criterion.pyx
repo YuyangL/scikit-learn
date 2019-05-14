@@ -906,11 +906,11 @@ cdef class RegressionCriterion(Criterion):
         # Inputs from RegressionCriterion.init()
         cdef SIZE_t* samples = self.samples
         # FIXME: maybe don't use tb, tb_tb, tb_bij and directly use self.~?
-        cdef DOUBLE_t* tb = self.tb
-        cdef DOUBLE_t* tb_tb = self.tb_tb
-        cdef DOUBLE_t* tb_bij = self.tb_bij
+        # cdef DOUBLE_t* tb = self.tb
+        # cdef DOUBLE_t* tb_tb = self.tb_tb
+        # cdef DOUBLE_t* tb_bij = self.tb_bij
         cdef SIZE_t i1, i2, p, i
-        # Least-squares fit related variables
+        # Least-squares fit dgelss() related variables
         cdef int row = 10
         cdef int col = 10
         cdef int nrhs = 1
@@ -919,8 +919,8 @@ cdef class RegressionCriterion(Criterion):
         cdef DOUBLE_t rcond = -1
         cdef int rank, info
         cdef int lwork = 50
-        # Assigning each element of T, T^^*T and T^T*bij to variable
-        cdef DOUBLE_t tb_pi1i2, tb_tb_pi1i2, tb_tb_pi2i1, tb_bij_pi1
+        # # Assigning each element of T, T^^*T and T^T*bij to variable
+        # cdef DOUBLE_t tb_pi1i2, tb_tb_pi1i2, tb_tb_pi2i1, tb_bij_pi1
 
         # Loop through 1st and 2nd dimension of a matrix
         # Depending on C- or Fortran-contiguous format, i1/i2 could mean row/column or column/row
@@ -934,27 +934,26 @@ cdef class RegressionCriterion(Criterion):
                 for p in range(pos1, pos2):
                     # Actual index of samples
                     i = samples[p]
-                    tb_pi1i2, tb_tb_pi1i2, tb_tb_bi2i1 = \
-                        tb[i, i1, i2], tb_tb[i, i1, i2], tb_tb[i, i2, i1]
+                    # tb_pi1i2, tb_tb_pi1i2, tb_tb_pi2i1 = \
+                    #     tb[i, i1, i2], tb_tb[i, i1, i2], tb_tb[i, i2, i1]
                     # Since T is n_samples x 9 components x 10 bases,
                     # i1 is row (component), i2 is column (basis) of tb and i1 is 0 - 8
                     if i1 < 9:
-                        # FIXME: maybe use tb_ii1i2 = tb[i, i1, i2] then +=?
-                        sum_tb[i1*10 + i2] += tb_pi1i2
+                        sum_tb[i1*10 + i2] += self.tb[i, i1, i2]
 
                     # i1 is row (basis), i2 is column (basis) of tb_tb
-                    sum_tb_tb[i1*10 + i2] += tb_tb_pi1i2
+                    sum_tb_tb[i1*10 + i2] += self.tb_tb[i, i1, i2]
                     # On the other hand, Fortran-contiguous sum_tb_tb_fortran store matrix in memory column (basis) wise
                     # Hence i1 is column (basis), i2 is row (basis) of tb_tb
-                    sum_tb_tb_fortran[i1*10 + i2] += tb_tb_pi2i1
+                    sum_tb_tb_fortran[i1*10 + i2] += self.tb_tb[i, i2, i1]
 
             # Calculate T^T*bij summed over samples from pos1 to pos2
             # Since tb_bij is 1D at each point, it's both C and Fortran-contiguous
             # FIXME: if dir = -1, then operation should be -= instead +=
             for p in range(pos1, pos2):
                 i = samples[p]
-                tb_bij_pi1 = tb_bij[i, i1]
-                sum_tb_bij[i1] += tb_bij_pi1
+                # tb_bij_pi1 = tb_bij[i, i1]
+                self.sum_tb_bij[i1] += self.tb_bij[i, i1]
 
         # Least-squares fit with dgelss() to solve g from T^T*g = T^T*bij
         # The solution of 10 g is contained in sum_tb_bij after cython_lapack.dgelss
@@ -1016,7 +1015,7 @@ cdef class RegressionCriterion(Criterion):
         cdef double* sum_right = self.sum_right
         cdef double* sum_total = self.sum_total
         # Tensor basis related arrays
-        cdef double* tb = self.tb
+        # cdef double* tb = self.tb
         cdef double* sum_tb_left = self.sum_tb_left
         cdef double* sum_tb_right = self.sum_tb_right
         cdef double* sum_g = self.sum_g
@@ -1051,7 +1050,7 @@ cdef class RegressionCriterion(Criterion):
                     for i2 in range(10):
                         for p in range(pos, new_pos):
                             i = samples[p]
-                            sum_tb_left[i1*10 + i2] += tb[i, i1, i2]
+                            sum_tb_left[i1*10 + i2] += self.tb[i, i1, i2]
 
                 # For RegressionChain compatibility, start a new loop
                 # with number of components tied to number of outputs
@@ -1087,7 +1086,7 @@ cdef class RegressionCriterion(Criterion):
                         for p in range(new_pos, end):
                             i = samples[p]
                             # Sum of T for samples from new_pos to end, equivalent to sum_tb_right, as it is easier
-                            sum_tb_right[i1*10 + i2] += tb[i, i1, i2]
+                            sum_tb_right[i1*10 + i2] += self.tb[i, i1, i2]
 
                 for k in range(self.n_outputs):
                     for i2 in range(10):
