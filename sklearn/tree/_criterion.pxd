@@ -26,8 +26,8 @@ cdef class Criterion:
     # Internal structures
     cdef const DOUBLE_t[:, ::1] y        # Values of y
     # Tensor inputs declaration
-    cdef const DOUBLE_t[:, :, ::1] tb, tb_tb
-    cdef const DOUBLE_t[:, ::1] tb_bij
+    cdef DOUBLE_t[:, :, ::1] tb, tb_tb
+    cdef DOUBLE_t[:, ::1] tb_bij
     cdef DOUBLE_t* sample_weight         # Sample weights
 
     cdef SIZE_t* samples                 # Sample indices in X, y

@@ -123,8 +123,11 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         return self.tree_.n_leaves
 
     def fit(self, X, y, sample_weight=None, check_input=True,
-            X_idx_sorted=None):
-
+            X_idx_sorted=None,
+            tb=None, tb_tb=None, tb_bij=None):
+        """
+        If using tensor basis criterion, tb, tb_tb, tb_bij need to be supplied
+        """
         random_state = check_random_state(self.random_state)
         if check_input:
             X = check_array(X, dtype=DTYPE, accept_sparse="csc")
@@ -178,8 +181,24 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         self.n_classes_ = np.array(self.n_classes_, dtype=np.intp)
 
-        if getattr(y, "dtype", None) != DOUBLE or not y.flags.contiguous:
-            y = np.ascontiguousarray(y, dtype=DOUBLE)
+        def __ensureContiguousDOUBLE(arr):
+            """
+            Function to ensure arr is C-contiguous with np.float64 (DOUBLE) dtype
+            :param arr: Array of choice
+            :type arr: np.array
+            :return: C-contiguous array with np.float64 dtype
+            :rtype: np.ndarray(dtype=np.float64)
+            """
+            if getattr(arr, "dtype", None) != DOUBLE or not arr.flags.contiguous:
+                return np.ascontiguousarray(arr, dtype=DOUBLE)
+
+        # Make sure y is C-contiguous with np.float64 dtype
+        y = __ensureContiguousDOUBLE(y)
+        # Also make sure tb, tb_tb, and tb_bij are C-contiguous and np.float64, if none of them are None
+        if tb is not None and tb_tb is not None and tb_bij is not None:
+            tb = __ensureContiguousDOUBLE(tb)
+            tb_tb = __ensureContiguousDOUBLE(tb_tb)
+            tb_bij = __ensureContiguousDOUBLE(tb_bij)
 
         # Check parameters
         max_depth = ((2 ** 31) - 1 if self.max_depth is None
@@ -262,10 +281,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                               "or larger than 1").format(max_leaf_nodes))
 
         if sample_weight is not None:
-            if (getattr(sample_weight, "dtype", None) != DOUBLE or
-                    not sample_weight.flags.contiguous):
-                sample_weight = np.ascontiguousarray(
-                    sample_weight, dtype=DOUBLE)
+            sample_weight = __ensureContiguousDOUBLE(sample_weight)
             if len(sample_weight.shape) > 1:
                 raise ValueError("Sample weights array has more "
                                  "than one dimension: %d" %
@@ -321,6 +337,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # otherwise it will be False.
         if self.presort == 'auto':
             presort = not issparse(X)
+            # TODO: shouldn't self.presort be updated to a bool here too? Otherwise self.presort is still 'auto'
 
         # If multiple trees are built on the same dataset, we only want to
         # presort once. Splitters now can accept presorted indices if desired,
@@ -377,7 +394,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                            self.min_impurity_decrease,
                                            min_impurity_split)
 
-        builder.build(self.tree_, X, y, sample_weight, X_idx_sorted)
+        # Addition of args of tb, tb_tb, and tb_bij
+        builder.build(self.tree_, X, y, sample_weight, X_idx_sorted, tb, tb_tb, tb_bij)
 
         if self.n_outputs_ == 1:
             self.n_classes_ = self.n_classes_[0]
@@ -774,8 +792,10 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
             presort=presort)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
-            X_idx_sorted=None):
+            X_idx_sorted=None,
+            tb=None, tb_tb=None, tb_bij=None):
         """Build a decision tree classifier from the training set (X, y).
+        Tensor basis criterion doesn't work for classifier so tb, tb_tb, tb_bij have no effect here.
 
         Parameters
         ----------
@@ -804,16 +824,24 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
             cached between trees. If None, the data will be sorted here.
             Don't use this parameter unless you know what to do.
 
+        tb : None
+
+        tb_tb : None
+
+        tb_bij : None
+
         Returns
         -------
         self : object
         """
 
+        # Again, tb, tb_tb, and tb_bij have no effect in classifier thus forced None in BaseDecisionTree
         super().fit(
             X, y,
             sample_weight=sample_weight,
             check_input=check_input,
-            X_idx_sorted=X_idx_sorted)
+            X_idx_sorted=X_idx_sorted,
+            tb=None, tb_tb=None, tb_bij=None)
         return self
 
     def predict_proba(self, X, check_input=True):
@@ -1116,8 +1144,10 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             presort=presort)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
-            X_idx_sorted=None):
+            X_idx_sorted=None,
+            tb=None, tb_tb=None, tb_bij=None):
         """Build a decision tree regressor from the training set (X, y).
+        If using tensor basis criterion, tb, tb_tb, tb_bij need to be supplied.
 
         Parameters
         ----------
@@ -1134,6 +1164,7 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             Sample weights. If None, then samples are equally weighted. Splits
             that would create child nodes with net zero or negative weight are
             ignored while searching for a split in each node.
+            Sample weights are disabled for tensor basis criterion.
 
         check_input : boolean, (default=True)
             Allow to bypass several input checking.
@@ -1145,16 +1176,27 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             cached between trees. If None, the data will be sorted here.
             Don't use this parameter unless you know what to do.
 
+        tb : array-like, shape = [n_samples, 9, 10], or None, optional
+            Tensor basis T, used for tensor basis criterion.
+
+        tb_tb : array-like, shape = [n_samples, 10, 10], or None, optional
+            T^T*T, where T^T is transpose of T, used for tensor basis criterion.
+
+        tb_bij : array-like, shape = [n_samples, 10], or None, optional
+            T^T*bij, where bij is anisotropy tensor, used for tensor basis criterion.
+
         Returns
         -------
         self : object
         """
 
+        # Additional args of tb, tb_tb, tb_bij, either all arrays or all None
         super().fit(
             X, y,
             sample_weight=sample_weight,
             check_input=check_input,
-            X_idx_sorted=X_idx_sorted)
+            X_idx_sorted=X_idx_sorted,
+            tb=tb, tb_tb=tb_tb, tb_bij=tb_bij)
         return self
 
 

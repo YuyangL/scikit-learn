@@ -92,8 +92,10 @@ cdef class TreeBuilder:
 
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
-                np.ndarray X_idx_sorted=None):
-        """Build a decision tree from the training set (X, y)."""
+                np.ndarray X_idx_sorted=None,
+                np.ndarray tb=None, np.ndarray tb_tb=None, np.ndarray tb_bij=None):
+        """Build a decision tree from the training set (X, y).
+        If using tensor basis criterion, then tb, tb_tb, tb_bij need to be supplied"""
         pass
 
     cdef inline _check_input(self, object X, np.ndarray y,
@@ -144,8 +146,10 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
 
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
-                np.ndarray X_idx_sorted=None):
-        """Build a decision tree from the training set (X, y)."""
+                np.ndarray X_idx_sorted=None,
+                np.ndarray tb=None, np.ndarray tb_tb=None, np.ndarray tb_bij=None):
+        """Build a decision tree from the training set (X, y).
+        If using tensor basis criterion, then tb,, tb_tb, and tb_bij need to be supplied"""
 
         # check input
         X, y, sample_weight = self._check_input(X, y, sample_weight)
@@ -174,7 +178,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
         cdef double min_impurity_split = self.min_impurity_split
 
         # Recursive partition (without actual recursion)
-        splitter.init(X, y, sample_weight_ptr, X_idx_sorted)
+        # Supply tb, tb_tb, tb_bij regardless whether they'll be used
+        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb, tb_tb, tb_bij)
 
         cdef SIZE_t start
         cdef SIZE_t end
@@ -214,6 +219,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 parent = stack_record.parent
                 is_left = stack_record.is_left
                 impurity = stack_record.impurity
+                # Initialized as 0
                 n_constant_features = stack_record.n_constant_features
 
                 n_node_samples = end - start
@@ -314,8 +320,10 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
 
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
-                np.ndarray X_idx_sorted=None):
-        """Build a decision tree from the training set (X, y)."""
+                np.ndarray X_idx_sorted=None,
+                np.ndarray tb = None, np.ndarray tb_tb = None, np.ndarray tb_bij = None):
+        """Build a decision tree from the training set (X, y).
+        If using tensor basis criterion, tb, tb_tb, tb_bij need to be supplied"""
 
         # check input
         X, y, sample_weight = self._check_input(X, y, sample_weight)
@@ -332,7 +340,8 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         cdef SIZE_t min_samples_split = self.min_samples_split
 
         # Recursive partition (without actual recursion)
-        splitter.init(X, y, sample_weight_ptr, X_idx_sorted)
+        # Suppply tb, tb_tb, tb_bij regardless whether they'll be used
+        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb, tb_tb, tb_bij)
 
         cdef PriorityHeap frontier = PriorityHeap(INITIAL_STACK_SIZE)
         cdef PriorityHeapRecord record

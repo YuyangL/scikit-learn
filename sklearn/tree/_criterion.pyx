@@ -21,6 +21,8 @@ from libc.stdlib cimport free
 from libc.string cimport memcpy
 from libc.string cimport memset
 from libc.math cimport fabs
+# Report if tensor mode criterion is successfully activated
+from libc.stdio cimport printf
 
 import numpy as np
 cimport numpy as np
@@ -57,9 +59,11 @@ cdef class Criterion:
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) nogil except -1:
+                  DOUBLE_t[:, :, ::1] tb=None, DOUBLE_t[:, :, ::1] tb_tb=None, DOUBLE_t[:, ::1] tb_bij=None) nogil \
+            except -1:
         # TODO: necessary to make sure init() here and init() in RegressionCriterion has same signatures?
         """Placeholder for a method which will initialize the criterion.
+        For tensor basis criterion, tb, tb_tb, and tb_bij need to be supplied.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -79,9 +83,12 @@ cdef class Criterion:
             The first sample to be used on this node
         end : SIZE_t
             The last sample used on this node
-        tb:
-        tb_tb:
-        tb_bij:
+        tb : array-like, dtype=DOUBLE_t, or None
+            Tensor basis matrix T, n_samples x 9 components x 10 bases, used for tensor basis criterion
+        tb_tb : array-like, dtype=DOUBLE_t, or None
+            T^T*T, where T^T is transpose of T, n_samples x 9 bases x 10 bases, used for tensor basis criterion
+        tb_bij : array-like, dtype=DOUBLE_t, or None
+            T^T*bij, where bij is anisotropy tensor, n_samples x 10 bases, used for tensor basis criterion
         """
 
         pass
@@ -286,9 +293,11 @@ cdef class ClassificationCriterion(Criterion):
     cdef int init(self, const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight, double weighted_n_samples,
                   SIZE_t* samples, SIZE_t start, SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) nogil except -1:
+                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1] tb_bij = None) \
+            nogil except -1:
         """Initialize the criterion at node samples[start:end] and
         children samples[start:start] and samples[start:end].
+        tb, tb_tb, and tb_bij are for tensor basis criterion and have no effect here.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -307,6 +316,9 @@ cdef class ClassificationCriterion(Criterion):
             The first sample to use in the mask
         end : SIZE_t
             The last sample to use in the mask
+        tb : None
+        tb_tb : None
+        tb_bij : None
         """
 
         self.y = y
@@ -805,14 +817,16 @@ cdef class RegressionCriterion(Criterion):
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij = None) \
+                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij =
+                  None) \
             nogil except -1:
         # TODO: pointer for tb, tb_tb and tb_bij?
         """Initialize the criterion at node samples[start:end] and
            children samples[start:start] and samples[start:end].
-        T is n_samples x 9 components x 10 bases.
-        T^T*T is n_samples x 10 bases x 10 bases.
-        T^T*bij is n_samples x 10 bases.
+        For tensor basis criterion only:
+        T is n_samples x 9 components x 10 bases or None.
+        T^T*T is n_samples x 10 bases x 10 bases or None.
+        T^T*bij is n_samples x 10 bases or None.
         ::1 means C-contiguous
         """
         # Initialize fields
@@ -827,9 +841,6 @@ cdef class RegressionCriterion(Criterion):
         # Extra initialization of T, T^T*T, and T^T*bij
         # so that g = (T^T*T)^(-1)*(T^T*bij)
         self.tb, self.tb_tb, self.tb_bij = tb, tb_tb, tb_bij
-        # self.tb = tb
-        # self.tb_tb = tb_tb
-        # self.tb_bij = tb_bij
         # On or off flag for tensor basis mode
         self.tb_mode = 1 if (tb != None and tb_tb != None and tb_bij != None) else 0
 
@@ -844,6 +855,7 @@ cdef class RegressionCriterion(Criterion):
         memset(self.sum_total, 0, self.n_outputs * sizeof(double))
 
         if self.tb_mode:
+            printf("Criterion in tensor mode")
             # Calculate sum_total, i.e. bij_hat for samples from start to end index,
             # results are stored in self.sum_bij_hat, and g stored in self.sum_g
             _ = self.reconstructAnisotropyTensor(start, end)
@@ -959,7 +971,7 @@ cdef class RegressionCriterion(Criterion):
         # The solution of 10 g is contained in sum_tb_bij after cython_lapack.dgelss
         # Note that dgelss() is written in Fortran thus every matrix needs to be Fortran-contiguous
         # TODO: explain 13 args
-        # FIXME: "Cannot assign type 'long' to 'int *'" error
+        # TODO: why is reference needed here?
         cython_lapack.dgelss(&row, &col, &nrhs,
                              sum_tb_tb_fortran, &lda, sum_tb_bij, &ldb,
                              self.ls_s, &rcond, &rank,

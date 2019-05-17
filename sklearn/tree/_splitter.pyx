@@ -118,10 +118,12 @@ cdef class Splitter:
                    object X,
                    const DOUBLE_t[:, ::1] y,
                    DOUBLE_t* sample_weight,
-                   np.ndarray X_idx_sorted=None) except -1:
+                   np.ndarray X_idx_sorted=None,
+                   DOUBLE_t[:, :, ::1] tb=None, DOUBLE_t[:, :, ::1] tb_tb=None, DOUBLE_t tb_bij=None) except -1:
         """Initialize the splitter.
 
         Take in the input data X, the target Y, and optional sample weights.
+        For tensor basis criterion, tb, tb_tb, and tb_bij need to be supplied.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -138,6 +140,15 @@ cdef class Splitter:
             The weights of the samples, where higher weighted samples are fit
             closer than lower weight samples. If not provided, all samples
             are assumed to have uniform weight.
+            
+        tb : np.ndarray, dtype=DOUBLE_t, or None (optional)
+            Tensor basis matrix T, n_samples x 9 components x 10 bases, used for tensor basis criterion.
+            
+        tb_tb : np.ndarray, dtype=DOUBLE_t, or None (optional)
+            T^T*T, where T^T is transpose of T, n_samples x 9 bases x 10 bases, used for tensor basis criterion.
+            
+        tb_bij : np.ndarray, dtype=DOUBLE_t, or None (optional)
+            T^T*bij, where bij is anisotropy tensor, n_samples x 10 bases, used for tensor basis criterion.
         """
 
         self.rand_r_state = self.random_state.randint(0, RAND_R_MAX)
@@ -178,6 +189,8 @@ cdef class Splitter:
         safe_realloc(&self.constant_features, n_features)
 
         self.y = y
+        # Initialize tensor basis criterion related arrays
+        self.tb, self.tb_tb, self.tb_bij = tb, tb_tb, tb_bij
 
         self.sample_weight = sample_weight
         return 0
@@ -202,12 +215,14 @@ cdef class Splitter:
         self.start = start
         self.end = end
 
+        # Additional args of tb, tb_tb, and tb_bij for tensor basis criterion
         self.criterion.init(self.y,
                             self.sample_weight,
                             self.weighted_n_samples,
                             self.samples,
                             start,
-                            end)
+                            end,
+                            self.tb, self.tb_tb, self.tb_bij)
 
         weighted_n_node_samples[0] = self.criterion.weighted_n_node_samples
         return 0
@@ -262,21 +277,37 @@ cdef class BaseDenseSplitter(Splitter):
                   object X,
                   const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
-                  np.ndarray X_idx_sorted=None) except -1:
+                  np.ndarray X_idx_sorted=None,
+                  DOUBLE_t[:, :, ::1] tb=None, DOUBLE_t[:, :, ::1] tb_tb=None, DOUBLE_t[:, ::1] tb_bij=None) \
+            except -1:
         """Initialize the splitter
+        For tensor basis criterion, tb, tb_tb, and tb_bji need to be supplied.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
         """
 
         # Call parent init
-        Splitter.init(self, X, y, sample_weight)
+        # Additional args of tb, tb_tb, and tb_bij
+        # X_idx_sorted in Splitter.init() has no effect
+        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb, tb_tb, tb_bij)
 
         self.X = X
 
         if self.presort == 1:
             self.X_idx_sorted = X_idx_sorted
             self.X_idx_sorted_ptr = <INT32_t*> self.X_idx_sorted.data
+            # Each axis of the array has a stride length,
+            # which is the number of bytes needed to go from one element on this axis to the next element.
+            # strides[1] means how many element-bytes to go to next column.
+            # Note that when presort == 1,
+            # X_idx_sorted has been converted to Fortran-contiguous in BaseDecisionTree.fit(),
+            # and strides[1] varies based on whether C- or Fortran-contiguous.
+            # C-contiguous memory address is row based, i.e. 1 element-byte needed to go to next column.
+            # Fortran-contiguous memory address is column based, i.e., n_rows element-bytes needed to go to next column.
+            # itemsize means bytes of such dtype.
+            # Thus, X_idx_sorted_stride means how many elements (samples for Fortran-contiguous)
+            # to go to next column (feature).
             self.X_idx_sorted_stride = (<SIZE_t> self.X_idx_sorted.strides[1] /
                                         <SIZE_t> self.X_idx_sorted.itemsize)
 
@@ -299,7 +330,8 @@ cdef class BestSplitter(BaseDenseSplitter):
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
-        """Find the best split on node samples[start:end]
+        """Find the best split on node samples[start:end].
+        n_constant_features : array-like, initialized as [0] in DepthFirstTreeBuilder.build()
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -348,6 +380,8 @@ cdef class BestSplitter(BaseDenseSplitter):
 
         _init_split(&best, end)
 
+        # If presort enabled, all samples lie in start - end index will be masked 1,
+        # effectively picking up indices in current node
         if self.presort == 1:
             for p in range(start, end):
                 sample_mask[samples[p]] = 1
@@ -361,10 +395,13 @@ cdef class BestSplitter(BaseDenseSplitter):
         # for good splitting) by ancestor nodes and save the information on
         # newly discovered constant features to spare computation on descendant
         # nodes.
+        #  n_features-      0+
         while (f_i > n_total_constants and  # Stop early if remaining features
                                             # are constant
+                #     0 += 1      const (<= n_features)
                 (n_visited_features < max_features or
                  # At least one drawn features must be non constant
+                 #     0 += 1                 0+                   0+
                  n_visited_features <= n_found_constants + n_drawn_constants)):
 
             n_visited_features += 1
@@ -379,11 +416,17 @@ cdef class BestSplitter(BaseDenseSplitter):
             #   yet and aren't constant apriori.
             # - [f_i:n_features[ holds features that have been drawn
             #   and aren't constant.
+            # features[:n_drawn_constants ~ n_known_constants ~ n_total_constants ~ n_features]
+            #                                                                   ^f_i^
+            # Initially,       0                   0                   0            n_features
 
-            # Draw a feature at random
+            # Draw a feature at random in [n_drawn_constants, f_i - n_found_constants).
+            # Initially, f_j in [0, f_i), and f_j < f_i always
             f_j = rand_int(n_drawn_constants, f_i - n_found_constants,
                            random_state)
 
+            # If f_j is a known constant feature, swap features[f_j <-> n_drawn_constants].
+            # Recall features is a list of [0, 1, 2, ..., n_features - 1]
             if f_j < n_known_constants:
                 # f_j in the interval [n_drawn_constants, n_known_constants[
                 tmp = features[f_j]
@@ -391,10 +434,13 @@ cdef class BestSplitter(BaseDenseSplitter):
                 features[n_drawn_constants] = tmp
 
                 n_drawn_constants += 1
-
+            # Else if f_j is not a known constant feature (could still be constant, just not known yet)
             else:
+                # Shift f_j by n_found_constants
+                # so f_j is effectively drawn from [n_total_constants, f_i).
                 # f_j in the interval [n_known_constants, f_i - n_found_constants[
                 f_j += n_found_constants
+                # Current feature index
                 # f_j in the interval [n_total_constants, f_i[
                 current.feature = features[f_j]
 
@@ -403,14 +449,28 @@ cdef class BestSplitter(BaseDenseSplitter):
                 # sorting the array in a manner which utilizes the cache more
                 # effectively.
                 if self.presort == 1:
+                    # Sorted sample index at this node, looped from start to end
+                    # (only when X[j] lies in samples[start:end] at this node, via brute search)
                     p = start
+                    # X_idx_sorted_stride = n_samples due to Fortran-contiguous conversion when presort == 1.
+                    # Thus feature index offset = n_samples * current feature index,
+                    # synonymous with column (feature) number in X_idx_sorted 2D array
                     feature_idx_offset = self.X_idx_sorted_stride * current.feature
 
-                    for i in range(self.n_total_samples): 
+                    for i in range(self.n_total_samples):
+                        # TODO: isn't X_idx_sorted 2D array?
+                        #  then j is [n, m]... The following doesn't make sense anymore...
+                        # Original unsorted sample index at current feature
                         j = X_idx_sorted[i + feature_idx_offset]
+                        # If such sample lies in samples[start:end] in this node
                         if sample_mask[j] == 1:
+                            # Sample index at this node starts at j, then the next time this condition fulfills,
+                            # the next sample index at this node starts at the new j
                             samples[p] = j
+                            # Since j is the original unsorted sample index,
+                            # get corresponding X value at j for current feature
                             Xf[p] = self.X[j, current.feature]
+                            # TODO: is it necessary to sort tb, tb_tb, tb_bij here too using j following Xf?
                             p += 1
                 else:
                     for i in range(start, end):
@@ -878,14 +938,19 @@ cdef class BaseSparseSplitter(Splitter):
                   object X,
                   const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
-                  np.ndarray X_idx_sorted=None) except -1:
-        """Initialize the splitter
+                  np.ndarray X_idx_sorted=None,
+                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1] tb_bij = None) \
+            except -1:
+        """Initialize the splitter.
+        For tensor basis criterion, tb, tb_tb, tb_bij need to be supplied.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
         """
         # Call parent init
-        Splitter.init(self, X, y, sample_weight)
+        # Also provide args of tb, tb_tb, and tb_bij even if they're None
+        # X_idx_sorted has no effect in Splitter.init()
+        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb, tb_tb, tb_bij)
 
         if not isinstance(X, csc_matrix):
             raise ValueError("X should be in csc format")
