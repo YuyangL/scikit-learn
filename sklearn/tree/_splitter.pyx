@@ -119,7 +119,8 @@ cdef class Splitter:
                    const DOUBLE_t[:, ::1] y,
                    DOUBLE_t* sample_weight,
                    np.ndarray X_idx_sorted=None,
-                   DOUBLE_t[:, :, ::1] tb=None, DOUBLE_t[:, :, ::1] tb_tb=None, DOUBLE_t tb_bij=None) except -1:
+                   DOUBLE_t[:, :, ::1] tb=None, DOUBLE_t[:, :, ::1] tb_tb=None, DOUBLE_t[:, ::1] tb_bij=None) except\
+            -1:
         """Initialize the splitter.
 
         Take in the input data X, the target Y, and optional sample weights.

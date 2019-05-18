@@ -866,6 +866,7 @@ cdef class RegressionCriterion(Criterion):
                 self.sum_total[k] = self.sum_bij_hat[9 - self.n_outputs + k]
 
         for p in range(start, end):
+            # Original unsorted sample index at this node, for sorted sample index in [start, end)
             i = samples[p]
 
             # Doesn't make sense for tensor basis mode to have custom weights at this moment
@@ -944,7 +945,7 @@ cdef class RegressionCriterion(Criterion):
                 #  "Converting to Python object not allowed without gil"
                 # FIXME: if dir = -1, then operation should be -= instead +=
                 for p in range(pos1, pos2):
-                    # Actual index of samples
+                    # Original unsorted sample index for sorted sample index in [pos1, pos2)
                     i = samples[p]
                     # tb_pi1i2, tb_tb_pi1i2, tb_tb_pi2i1 = \
                     #     tb[i, i1, i2], tb_tb[i, i1, i2], tb_tb[i, i2, i1]
