@@ -81,7 +81,7 @@ cdef class RegressionCriterion(Criterion):
     """Abstract regression criterion."""
 
     cdef double sq_sum_total
-    # Tensor basis related declaration
+    # Tensor basis related declaration that are used in reconstructAnisotropyTensor()
     cdef int tb_mode
     # Each pointer has to be declared separately
     # TODO: why pointer here?
@@ -91,6 +91,9 @@ cdef class RegressionCriterion(Criterion):
     cdef double* sum_tb_bij
     cdef double* sum_g
     cdef double* sum_bij_hat
+    cdef double* sum_bij
+    cdef double* mse
+    cdef double sum_mse
     # dgelss() related declaration
     cdef double* ls_s
     cdef double* ls_work

@@ -765,9 +765,9 @@ cdef class RegressionCriterion(Criterion):
         self.sum_total = <double*> calloc(n_outputs, sizeof(double))
         self.sum_left = <double*> calloc(n_outputs, sizeof(double))
         self.sum_right = <double*> calloc(n_outputs, sizeof(double))
-        # Allocate sum of T, T^T*T, T^T*bij, g, and bij_hat over samples from start to end index,
+        # Allocate sum of T, T^T*T, T^T*bij, g, bij_hat, bij, and mse over samples from start to end index,
         # represented by 1D flattened array of memory addresses
-        # TODO: these need to have variable length if RegressionChain were to be used, something like y.shape[1]
+        # TODO: these need to have variable length if RegressionChain were to be used, something like y.shape[1]?
         # T is 9 components x 10 bases
         self.sum_tb = <double*> calloc(90, sizeof(double))
         # T^T*T is 10 bases x 10 bases for both C- and Fortran-contiguous format
@@ -777,8 +777,10 @@ cdef class RegressionCriterion(Criterion):
         self.sum_tb_bij = <double*> calloc(10, sizeof(double))
         # g is 10 bases x 1
         self.sum_g = <double*> calloc(10, sizeof(double))
-        # bij_hat is 9 components x 1
+        # bij_hat, bij, and mse are both 9 components x 1
         self.sum_bij_hat = <double*> calloc(9, sizeof(double))
+        self.sum_bij = <double*> calloc(9, sizeof(double))
+        self.mse = <double*> calloc(9, sizeof(double))
         # dgelss() least-squares fit of Ax = b related outputs
         # Dimension min(A's row, A's col)
         self.ls_s = <double*> calloc(10, sizeof(double))
@@ -797,13 +799,17 @@ cdef class RegressionCriterion(Criterion):
 
     def __dealloc__(self):
         """Destructor. Additional destruction of newly introduced tensor basis arrays"""
-        # Deallocate sum of T, T^T*T, T^T*bij, g, and bij_hat over samples from start to end index
+
+        # Deallocate sum of T, T^T*T, T^T*bij, g, bij_hat, bij, mse over samples from start to end index,
+        # that are used in reconstructAnisotropyTensor()
         free(self.sum_tb)
         free(self.sum_tb_tb)
         free(self.sum_tb_tb_fortran)
         free(self.sum_tb_bij)
         free(self.sum_g)
         free(self.sum_bij_hat)
+        free(self.sum_bij)
+        free(self.mse)
         # Also deallocate sum of T in left and right bin in update()
         free(self.sum_tb_left)
         free(self.sum_tb_right)
@@ -817,10 +823,9 @@ cdef class RegressionCriterion(Criterion):
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1]tb_bij =
-                  None) \
+                  # TODO: pointer for tb, tb_tb and tb_bij?
+                  DOUBLE_t[:, :, ::1] tb=None, DOUBLE_t[:, :, ::1] tb_tb=None, DOUBLE_t[:, ::1] tb_bij=None) \
             nogil except -1:
-        # TODO: pointer for tb, tb_tb and tb_bij?
         """Initialize the criterion at node samples[start:end] and
            children samples[start:start] and samples[start:end].
         For tensor basis criterion only:
@@ -892,7 +897,7 @@ cdef class RegressionCriterion(Criterion):
         self.reset()
         return 0
 
-    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir = 1) nogil except -1:
+    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir=1) nogil except -1:
         """Reconstruct the total anistropy tensor bij_hat contributed by samples in the index list of samples[
         pos1:pos2] with specified direction.
         First, evaluate 10 tensor basis coefficients g, by solving the under-determined linear system of
@@ -900,12 +905,16 @@ cdef class RegressionCriterion(Criterion):
         Second, compute the reconstructed bij_hat using
         sum(bij_hat) = sum(T*g), summed over samples from pos1 to pos2, dimensionally [9 x 1] = [9 x 10] x [10 x 1].
         sum(bij_hat) is equivalently sum_total/sum_left/sum_right."""
-        # Initialize the memory blocks of sum_tb, sum_tb_tb, sum_tb_tb_fortran, sum_tb_bij, and sum_bij_hat to 0
+
+        # Initialize the memory blocks of sum_tb, sum_tb_tb, sum_tb_tb_fortran, sum_tb_bij, sum_bij_hat , sum_bij,
+        # and sum_mse to 0
         memset(self.sum_tb, 0, 90*sizeof(double))
         memset(self.sum_tb_tb, 0, 100*sizeof(double))
         memset(self.sum_tb_tb_fortran, 0, 100*sizeof(double))
         memset(self.sum_tb_bij, 0, 10*sizeof(double))
         memset(self.sum_bij_hat, 0, 9*sizeof(double))
+        memset(self.sum_bij, 0, 9*sizeof(double))
+        memset(self.mse, 0, 9*sizeof(double))
 
         # Tensor basis matrices summed over samples from pos1 to pos2.
         # sum_tb_tb points to the address self.sum_tb_tb.
@@ -916,9 +925,11 @@ cdef class RegressionCriterion(Criterion):
         cdef DOUBLE_t* sum_tb_bij = self.sum_tb_bij
         cdef DOUBLE_t* sum_g = self.sum_g
         cdef DOUBLE_t* sum_bij_hat = self.sum_bij_hat
+        cdef DOUBLE_t* sum_bij = self.sum_bij
+        cdef DOUBLE_t* mse = self.mse
         # Inputs from RegressionCriterion.init()
         cdef SIZE_t* samples = self.samples
-        # FIXME: maybe don't use tb, tb_tb, tb_bij and directly use self.~?
+        # TODO: Why doesn't the following work?
         # cdef DOUBLE_t* tb = self.tb
         # cdef DOUBLE_t* tb_tb = self.tb_tb
         # cdef DOUBLE_t* tb_bij = self.tb_bij
@@ -932,8 +943,7 @@ cdef class RegressionCriterion(Criterion):
         cdef DOUBLE_t rcond = -1
         cdef int rank, info
         cdef int lwork = 50
-        # # Assigning each element of T, T^^*T and T^T*bij to variable
-        # cdef DOUBLE_t tb_pi1i2, tb_tb_pi1i2, tb_tb_pi2i1, tb_bij_pi1
+        self.sum_mse = 0.0
 
         # Loop through 1st and 2nd dimension of a matrix
         # Depending on C- or Fortran-contiguous format, i1/i2 could mean row/column or column/row
@@ -943,12 +953,10 @@ cdef class RegressionCriterion(Criterion):
                 # summed over samples from pos1 to pos2
                 # FIXME: specifying range order dir causes error:
                 #  "Converting to Python object not allowed without gil"
-                # FIXME: if dir = -1, then operation should be -= instead +=
+                # TODO: dir functionality in range
                 for p in range(pos1, pos2):
                     # Original unsorted sample index for sorted sample index in [pos1, pos2)
                     i = samples[p]
-                    # tb_pi1i2, tb_tb_pi1i2, tb_tb_pi2i1 = \
-                    #     tb[i, i1, i2], tb_tb[i, i1, i2], tb_tb[i, i2, i1]
                     # Since T is n_samples x 9 components x 10 bases,
                     # i1 is row (component), i2 is column (basis) of tb and i1 is 0 - 8
                     if i1 < 9:
@@ -960,13 +968,17 @@ cdef class RegressionCriterion(Criterion):
                     # Hence i1 is column (basis), i2 is row (basis) of tb_tb
                     sum_tb_tb_fortran[i1*10 + i2] += self.tb_tb[i, i2, i1]
 
-            # Calculate T^T*bij summed over samples from pos1 to pos2
+            # Calculate T^T*bij and bij summed over samples from pos1 to pos2
             # Since tb_bij is 1D at each point, it's both C and Fortran-contiguous
-            # FIXME: if dir = -1, then operation should be -= instead +=
+            # TODO: dir functionality in range
             for p in range(pos1, pos2):
                 i = samples[p]
-                # tb_bij_pi1 = tb_bij[i, i1]
                 self.sum_tb_bij[i1] += self.tb_bij[i, i1]
+                # i1 is tied to number of outputs for RegressionChain compatibility,
+                # first 9 - n_outputs elements are 0
+                # TODO: if RegressionChain, y shrinks right?
+                if i1 < self.n_outputs:
+                    sum_bij[9 - self.n_outputs + i1] += self.y[i, i1]
 
         # Least-squares fit with dgelss() to solve g from T^T*g = T^T*bij
         # The solution of 10 g is contained in sum_tb_bij after cython_lapack.dgelss
@@ -993,6 +1005,15 @@ cdef class RegressionCriterion(Criterion):
                 # TODO: trim sum_total's dimension to match n_outputs for RegressionChain, could either remove
                 #  learned components here or already reduce row number during T_reduced*g_reduced = bij_reduced
                 sum_bij_hat[i1] += sum_tb[(9 - self.n_outputs + i1)*10 + i2]*sum_g[i2]
+
+            # Mean Square Error [sum(bij) - sum(bij_hat)]^2/n_samples
+            # RegressionChain compatible
+            mse[9 - self.n_outputs + i1] = \
+                (sum_bij[9 - self.n_outputs + i1] - sum_bij_hat[9 - self.n_outputs + i1])**2/self.n_samples
+            self.sum_mse += mse[9 - self.n_outputs + i1]
+
+        # The following print is incompatible with RegressionChain
+        printf("\nMSE from least-squares fitted g is %4.8f\n", mse)
 
         return 0
 

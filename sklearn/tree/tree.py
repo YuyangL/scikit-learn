@@ -181,16 +181,22 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         self.n_classes_ = np.array(self.n_classes_, dtype=np.intp)
 
-        def __ensureContiguousDOUBLE(arr):
+        def __ensureContiguousDOUBLE(arr, dtype=DOUBLE):
             """
             Function to ensure arr is C-contiguous with np.float64 (DOUBLE) dtype
             :param arr: Array of choice
-            :type arr: np.array
+            :type arr: np.ndarray
+            :param dtype: Data type, default DOUBLE (np.float64)
+            :type dtype: Numpy dtype
             :return: C-contiguous array with np.float64 dtype
             :rtype: np.ndarray(dtype=np.float64)
             """
-            if getattr(arr, "dtype", None) != DOUBLE or not arr.flags.contiguous:
-                return np.ascontiguousarray(arr, dtype=DOUBLE)
+            if getattr(arr, "dtype", None) != dtype or not arr.flags.contiguous:
+
+                return np.ascontiguousarray(arr, dtype=dtype)
+            else:
+
+                return arr
 
         # Make sure y is C-contiguous with np.float64 dtype
         y = __ensureContiguousDOUBLE(y)
