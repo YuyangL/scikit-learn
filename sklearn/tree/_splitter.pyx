@@ -379,6 +379,7 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef DTYPE_t current_feature_value
         cdef SIZE_t partition_end
 
+        # Initialize "best" SplitRecord incl. its best.pos to end
         _init_split(&best, end)
 
         # If presort enabled, all samples lie in start - end index will be masked 1,
@@ -479,6 +480,7 @@ cdef class BestSplitter(BaseDenseSplitter):
 
                     sort(Xf + start, samples + start, end - start)
 
+                # If sorted feature values Xf are all constant, found constant feature + 1
                 if Xf[end - 1] <= Xf[start] + FEATURE_THRESHOLD:
                     features[f_j] = features[n_total_constants]
                     features[n_total_constants] = current.feature
@@ -486,15 +488,20 @@ cdef class BestSplitter(BaseDenseSplitter):
                     n_found_constants += 1
                     n_total_constants += 1
 
+                # While going through every feature in sampled max_features features,
+                # if currently non-constant feature
                 else:
                     f_i -= 1
                     features[f_i], features[f_j] = features[f_j], features[f_i]
 
                     # Evaluate all splits
+                    # Set sum_left to 0, sum_right to sum_total, and pos to start
                     self.criterion.reset()
                     p = start
 
+                    # Go through every sample at current node
                     while p < end:
+                        # Skip constant feature values
                         while (p + 1 < end and
                                Xf[p + 1] <= Xf[p] + FEATURE_THRESHOLD):
                             p += 1
@@ -513,6 +520,8 @@ cdef class BestSplitter(BaseDenseSplitter):
                                     ((end - current.pos) < min_samples_leaf)):
                                 continue
 
+                            # Derive sum_left, sum_right from current.pos and sum_total
+                            # and set Criterion.pos to current.pos
                             self.criterion.update(current.pos)
 
                             # Reject if min_weight_leaf is not satisfied
@@ -520,16 +529,21 @@ cdef class BestSplitter(BaseDenseSplitter):
                                     (self.criterion.weighted_n_right < min_weight_leaf)):
                                 continue
 
+                            # Having derived sum_left and sum_right, calculate interim pseudo impurity improvement as
+                            # sum_left(y)^2/n_left + sum_right(y)^2/n_right, higher is better.
+                            # Basically mean(y_left)^2 + mean(y_right)^2, higher is better
                             current_proxy_improvement = self.criterion.proxy_impurity_improvement()
 
                             if current_proxy_improvement > best_proxy_improvement:
                                 best_proxy_improvement = current_proxy_improvement
+                                # Split value
                                 # sum of halves is used to avoid infinite value
                                 current.threshold = Xf[p - 1] / 2.0 + Xf[p] / 2.0
-
+                                # TODO: what's 1st condition?
                                 if ((current.threshold == Xf[p]) or
                                     (current.threshold == INFINITY) or
                                     (current.threshold == -INFINITY)):
+                                    # Making sure current split value isn't +-INFINITY anymore
                                     current.threshold = Xf[p - 1]
 
                                 best = current  # copy
@@ -551,8 +565,11 @@ cdef class BestSplitter(BaseDenseSplitter):
                     samples[p] = tmp
 
             self.criterion.reset()
+            # Now that best.pos is found recalculate sum_left and sum_right based on bset.pos
             self.criterion.update(best.pos)
+            # Calculate actual impurity improvement based on best.pos
             best.improvement = self.criterion.impurity_improvement(impurity)
+            # Calculate children impurity based on best.pos
             self.criterion.children_impurity(&best.impurity_left,
                                              &best.impurity_right)
 

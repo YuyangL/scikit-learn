@@ -83,7 +83,7 @@ cdef inline double log(double x) nogil:
 # =============================================================================
 
 cdef class Stack:
-    """A LIFO data structure.
+    """A LIFO (Last In First Out) data structure.
 
     Attributes
     ----------

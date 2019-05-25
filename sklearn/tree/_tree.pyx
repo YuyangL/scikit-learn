@@ -204,13 +204,17 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
 
         with nogil:
             # push root node onto stack
+            # impurity is pushed as INFINITY
             rc = stack.push(0, n_node_samples, 0, _TREE_UNDEFINED, 0, INFINITY, 0)
             if rc == -1:
                 # got return code -1 - out-of-memory
                 with gil:
                     raise MemoryError()
 
+            # The loop to split the tree
             while not stack.is_empty():
+                # Pop whatever record is on top, the order should be all left first then all right,
+                # as record was pushed as right then left each depth
                 stack.pop(&stack_record)
 
                 start = stack_record.start
@@ -218,11 +222,15 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 depth = stack_record.depth
                 parent = stack_record.parent
                 is_left = stack_record.is_left
+                # Initialized as INFINITY, then impurity becomes each child node's impurity
+                # (i.e. impurity_left or impurity_right)
                 impurity = stack_record.impurity
                 # Initialized as 0
                 n_constant_features = stack_record.n_constant_features
 
                 n_node_samples = end - start
+                # Basically calling Criterion.init(), sq_sum_total and sum_total will be calculated.
+                # Then Criterion.reset() is called and set sum_left to 0, sum_right to sum_total, and pos to start
                 splitter.node_reset(start, end, &weighted_n_node_samples)
 
                 is_leaf = (depth >= max_depth or
@@ -231,6 +239,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                            weighted_n_node_samples < 2 * min_weight_leaf)
 
                 if first:
+                    # Impurity at root node, a.k.a. MSE
                     impurity = splitter.node_impurity()
                     first = 0
 
@@ -238,6 +247,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                            (impurity <= min_impurity_split))
 
                 if not is_leaf:
+                    # Find best split on node samples[start:end]
                     splitter.node_split(impurity, &split, &n_constant_features)
                     # If EPSILON=0 in the below comparison, float precision
                     # issues stop splitting, producing trees that are
@@ -255,17 +265,21 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                     break
 
                 # Store value for all nodes, to facilitate tree/model
-                # inspection and interpretation
+                # inspection and interpretation.
+                # If using tensor basis criterion, definition of node value is changed from mean y at this node to
+                # deviatoric MSE = MSE - sum_i^n_samples(yi^2)/n_samples
                 splitter.node_value(tree.value + node_id * tree.value_stride)
 
                 if not is_leaf:
-                    # Push right child on stack
+                    # Push right child on stack incl. assigning impurity_right to new "impurity" at node
                     rc = stack.push(split.pos, end, depth + 1, node_id, 0,
                                     split.impurity_right, n_constant_features)
                     if rc == -1:
                         break
 
-                    # Push left child on stack
+                    # Push left child on stack incl. assigning impurity_left to new "impurity" at node.
+                    # Since left child is pushed later than right,
+                    # left child is on top of right and is popped first when called
                     rc = stack.push(start, split.pos, depth + 1, node_id, 1,
                                     split.impurity_left, n_constant_features)
                     if rc == -1:
@@ -340,7 +354,7 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         cdef SIZE_t min_samples_split = self.min_samples_split
 
         # Recursive partition (without actual recursion)
-        # Suppply tb, tb_tb, tb_bij regardless whether they'll be used
+        # Supply tb, tb_tb, tb_bij regardless whether they'll be used
         splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb, tb_tb, tb_bij)
 
         cdef PriorityHeap frontier = PriorityHeap(INITIAL_STACK_SIZE)

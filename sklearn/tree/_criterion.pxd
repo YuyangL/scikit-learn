@@ -26,8 +26,7 @@ cdef class Criterion:
     # Internal structures
     cdef const DOUBLE_t[:, ::1] y        # Values of y
     # Tensor inputs declaration
-    cdef DOUBLE_t[:, :, ::1] tb, tb_tb
-    cdef DOUBLE_t[:, ::1] tb_bij
+    cdef DOUBLE_t[:, :, ::1] tb
     cdef DOUBLE_t* sample_weight         # Sample weights
 
     cdef SIZE_t* samples                 # Sample indices in X, y
@@ -59,8 +58,7 @@ cdef class Criterion:
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb = *, DOUBLE_t[:, :, ::1] tb_tb = *, DOUBLE_t[:, ::1]tb_bij = *) nogil \
-            except -1
+                  DOUBLE_t[:, :, ::1] tb=*) nogil except -1
     cdef int reset(self) nogil except -1
     cdef int reverse_reset(self) nogil except -1
     cdef int update(self, SIZE_t new_pos) nogil except -1
@@ -82,28 +80,18 @@ cdef class RegressionCriterion(Criterion):
 
     cdef double sq_sum_total
     # Tensor basis related declaration that are used in reconstructAnisotropyTensor()
-    cdef int tb_mode
+    cdef bint tb_mode
     # Each pointer has to be declared separately
-    # TODO: why pointer here?
-    cdef double* sum_tb
-    cdef double* sum_tb_tb
-    cdef double* sum_tb_tb_fortran
-    cdef double* sum_tb_bij
-    cdef double* sum_g
-    cdef double* sum_bij_hat
-    cdef double* sum_bij
-    cdef double* mse
-    cdef double sum_mse
+    cdef double* tb_node
+    cdef double* tb_transpose_node
+    cdef double* bij_node
+    cdef double* bij_hat_node
+    cdef double* g_node
+    cdef double* se_dev
     # dgelss() related declaration
     cdef double* ls_s
+    cdef SIZE_t ls_lwork
     cdef double* ls_work
-    # Definition of arrays in update()
-    cdef double* sum_tb_left
-    cdef double* sum_tb_right
-    # Declaration of signatures of reconstructAnisotropyTensor()
-    # TODO: pos1 and pos2 necessary since they're declared in cdef int reconstructAnisotropyTensor anyway?
-    cdef SIZE_t pos1, pos2
-    cdef int dir
 
     # Additional function to reconstruct anisotropy tensors
-    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, int dir = *) nogil except -1
+    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil except -1

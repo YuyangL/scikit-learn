@@ -124,7 +124,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
-            tb=None, tb_tb=None, tb_bij=None):
+            tb=None):
         """
         If using tensor basis criterion, tb, tb_tb, tb_bij need to be supplied
         """
@@ -200,11 +200,13 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         # Make sure y is C-contiguous with np.float64 dtype
         y = __ensureContiguousDOUBLE(y)
-        # Also make sure tb, tb_tb, and tb_bij are C-contiguous and np.float64, if none of them are None
-        if tb is not None and tb_tb is not None and tb_bij is not None:
+        # Check for tensor basis array input.
+        # Also make sure tb is C-contiguous and np.float64, if none of them are None
+        if tb is not None:
             tb = __ensureContiguousDOUBLE(tb)
-            tb_tb = __ensureContiguousDOUBLE(tb_tb)
-            tb_bij = __ensureContiguousDOUBLE(tb_bij)
+            self.tb_mode = True
+        else:
+            self.tb_mode = False
 
         # Check parameters
         max_depth = ((2 ** 31) - 1 if self.max_depth is None
@@ -368,7 +370,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                                          self.n_classes_)
             else:
                 criterion = CRITERIA_REG[self.criterion](self.n_outputs_,
-                                                         n_samples)
+                                                         n_samples, self.tb_mode)
 
         SPLITTERS = SPARSE_SPLITTERS if issparse(X) else DENSE_SPLITTERS
 
