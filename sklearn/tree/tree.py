@@ -126,7 +126,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
             X_idx_sorted=None,
             tb=None):
         """
-        If using tensor basis criterion, tb, tb_tb, tb_bij need to be supplied
+        If using tensor basis criterion, tensor basis tb needs to be supplied.
         """
         random_state = check_random_state(self.random_state)
         if check_input:
@@ -201,7 +201,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # Make sure y is C-contiguous with np.float64 dtype
         y = __ensureContiguousDOUBLE(y)
         # Check for tensor basis array input.
-        # Also make sure tb is C-contiguous and np.float64, if none of them are None
+        # Also make sure tb is C-contiguous and np.float64, if it's not None
+        # tb_mode will be used for Criterion.__cinit__()
         if tb is not None:
             tb = __ensureContiguousDOUBLE(tb)
             self.tb_mode = True
@@ -299,6 +300,12 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                  "number of samples=%d" %
                                  (len(sample_weight), n_samples))
 
+        # If tensor basis mode on, check for length of tb too
+        if self.tb_mode:
+            if len(tb) != n_samples:
+                raise ValueError("Number of tensor basis set=%d does not match "
+                                 "number of samples=%d"%(len(tb), n_samples))
+
         if expanded_class_weight is not None:
             if sample_weight is not None:
                 sample_weight = sample_weight * expanded_class_weight
@@ -369,6 +376,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                 criterion = CRITERIA_CLF[self.criterion](self.n_outputs_,
                                                          self.n_classes_)
             else:
+                # Addition arg of tb_mode to switch on/off tensor basis criterion
                 criterion = CRITERIA_REG[self.criterion](self.n_outputs_,
                                                          n_samples, self.tb_mode)
 
@@ -402,8 +410,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                            self.min_impurity_decrease,
                                            min_impurity_split)
 
-        # Addition of args of tb, tb_tb, and tb_bij
-        builder.build(self.tree_, X, y, sample_weight, X_idx_sorted, tb, tb_tb, tb_bij)
+        # Addition of args of tb
+        builder.build(self.tree_, X, y, sample_weight, X_idx_sorted, tb)
 
         if self.n_outputs_ == 1:
             self.n_classes_ = self.n_classes_[0]
@@ -800,8 +808,7 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
             presort=presort)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
-            X_idx_sorted=None,
-            tb=None, tb_tb=None, tb_bij=None):
+            X_idx_sorted=None, **kwargs):
         """Build a decision tree classifier from the training set (X, y).
         Tensor basis criterion doesn't work for classifier so tb, tb_tb, tb_bij have no effect here.
 
@@ -832,24 +839,18 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
             cached between trees. If None, the data will be sorted here.
             Don't use this parameter unless you know what to do.
 
-        tb : None
-
-        tb_tb : None
-
-        tb_bij : None
-
         Returns
         -------
         self : object
         """
 
-        # Again, tb, tb_tb, and tb_bij have no effect in classifier thus forced None in BaseDecisionTree
+        # Tensor basis input tb has no effect in classifier thus forced None in BaseDecisionTree
         super().fit(
             X, y,
             sample_weight=sample_weight,
             check_input=check_input,
             X_idx_sorted=X_idx_sorted,
-            tb=None, tb_tb=None, tb_bij=None)
+            tb=None)
         return self
 
     def predict_proba(self, X, check_input=True):
@@ -947,6 +948,7 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
         squared error with Friedman's improvement score for potential splits,
         and "mae" for the mean absolute error, which minimizes the L1 loss
         using the median of each terminal node.
+        If tensor basis tb is supplied in fit(), then MSE is based on tensor basis criterion.
 
         .. versionadded:: 0.18
            Mean Absolute Error (MAE) criterion.
@@ -1153,7 +1155,7 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
-            tb=None, tb_tb=None, tb_bij=None):
+            tb=None):
         """Build a decision tree regressor from the training set (X, y).
         If using tensor basis criterion, tb, tb_tb, tb_bij need to be supplied.
 
@@ -1167,6 +1169,7 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
         y : array-like, shape = [n_samples] or [n_samples, n_outputs]
             The target values (real numbers). Use ``dtype=np.float64`` and
             ``order='C'`` for maximum efficiency.
+            If using tensor basis criterion, then y should be anisotropy tensor of shape [n_samples, 9].
 
         sample_weight : array-like, shape = [n_samples] or None
             Sample weights. If None, then samples are equally weighted. Splits
@@ -1185,26 +1188,20 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             Don't use this parameter unless you know what to do.
 
         tb : array-like, shape = [n_samples, 9, 10], or None, optional
-            Tensor basis T, used for tensor basis criterion.
-
-        tb_tb : array-like, shape = [n_samples, 10, 10], or None, optional
-            T^T*T, where T^T is transpose of T, used for tensor basis criterion.
-
-        tb_bij : array-like, shape = [n_samples, 10], or None, optional
-            T^T*bij, where bij is anisotropy tensor, used for tensor basis criterion.
+            Tensor basis Tij, used for MSE tensor basis criterion. If None, then tensor basis mode is off.
 
         Returns
         -------
         self : object
         """
 
-        # Additional args of tb, tb_tb, tb_bij, either all arrays or all None
+        # Additional arg of tb, either 3D array or None
         super().fit(
             X, y,
             sample_weight=sample_weight,
             check_input=check_input,
             X_idx_sorted=X_idx_sorted,
-            tb=tb, tb_tb=tb_tb, tb_bij=tb_bij)
+            tb=tb)
         return self
 
 

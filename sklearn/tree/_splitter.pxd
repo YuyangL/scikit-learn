@@ -63,8 +63,7 @@ cdef class Splitter:
     cdef const DOUBLE_t[:, ::1] y
     cdef DOUBLE_t* sample_weight
     # Tensor basis criterion related declarations
-    cdef DOUBLE_t[:, :, ::1] tb, tb_tb
-    cdef DOUBLE_t[:, ::1] tb_bij
+    cdef DOUBLE_t[:, :, ::1] tb
 
     # The samples vector `samples` is maintained by the Splitter object such
     # that the samples contained in a node are contiguous. With this setting,
@@ -86,7 +85,7 @@ cdef class Splitter:
     cdef int init(self, object X, const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
                   np.ndarray X_idx_sorted=*,
-                  DOUBLE_t[:, :, ::1] tb=*, DOUBLE_t[:, :, ::1] tb_tb=*, DOUBLE_t[:, ::1] tb_bij=*) except -1
+                  DOUBLE_t[:, :, ::1] tb=*) except -1
 
     cdef int node_reset(self, SIZE_t start, SIZE_t end,
                         double* weighted_n_node_samples) nogil except -1

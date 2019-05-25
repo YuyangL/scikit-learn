@@ -119,8 +119,7 @@ cdef class Splitter:
                    const DOUBLE_t[:, ::1] y,
                    DOUBLE_t* sample_weight,
                    np.ndarray X_idx_sorted=None,
-                   DOUBLE_t[:, :, ::1] tb=None, DOUBLE_t[:, :, ::1] tb_tb=None, DOUBLE_t[:, ::1] tb_bij=None) except\
-            -1:
+                   DOUBLE_t[:, :, ::1] tb=None) except -1:
         """Initialize the splitter.
 
         Take in the input data X, the target Y, and optional sample weights.
@@ -143,13 +142,7 @@ cdef class Splitter:
             are assumed to have uniform weight.
             
         tb : np.ndarray, dtype=DOUBLE_t, or None (optional)
-            Tensor basis matrix T, n_samples x 9 components x 10 bases, used for tensor basis criterion.
-            
-        tb_tb : np.ndarray, dtype=DOUBLE_t, or None (optional)
-            T^T*T, where T^T is transpose of T, n_samples x 9 bases x 10 bases, used for tensor basis criterion.
-            
-        tb_bij : np.ndarray, dtype=DOUBLE_t, or None (optional)
-            T^T*bij, where bij is anisotropy tensor, n_samples x 10 bases, used for tensor basis criterion.
+            Tensor basis matrix Tij, n_samples x 9 components x 10 bases, used for tensor basis criterion.
         """
 
         self.rand_r_state = self.random_state.randint(0, RAND_R_MAX)
@@ -190,8 +183,8 @@ cdef class Splitter:
         safe_realloc(&self.constant_features, n_features)
 
         self.y = y
-        # Initialize tensor basis criterion related arrays
-        self.tb, self.tb_tb, self.tb_bij = tb, tb_tb, tb_bij
+        # Initialize tensor basis Tij
+        self.tb = tb
 
         self.sample_weight = sample_weight
         return 0
@@ -216,14 +209,14 @@ cdef class Splitter:
         self.start = start
         self.end = end
 
-        # Additional args of tb, tb_tb, and tb_bij for tensor basis criterion
+        # Additional args of tb for tensor basis criterion
         self.criterion.init(self.y,
                             self.sample_weight,
                             self.weighted_n_samples,
                             self.samples,
                             start,
                             end,
-                            self.tb, self.tb_tb, self.tb_bij)
+                            self.tb)
 
         weighted_n_node_samples[0] = self.criterion.weighted_n_node_samples
         return 0
@@ -279,10 +272,9 @@ cdef class BaseDenseSplitter(Splitter):
                   const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
                   np.ndarray X_idx_sorted=None,
-                  DOUBLE_t[:, :, ::1] tb=None, DOUBLE_t[:, :, ::1] tb_tb=None, DOUBLE_t[:, ::1] tb_bij=None) \
-            except -1:
+                  DOUBLE_t[:, :, ::1] tb=None) except -1:
         """Initialize the splitter
-        For tensor basis criterion, tb, tb_tb, and tb_bji need to be supplied.
+        For tensor basis criterion, tb needs to be supplied.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -291,7 +283,7 @@ cdef class BaseDenseSplitter(Splitter):
         # Call parent init
         # Additional args of tb, tb_tb, and tb_bij
         # X_idx_sorted in Splitter.init() has no effect
-        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb, tb_tb, tb_bij)
+        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb)
 
         self.X = X
 
@@ -529,9 +521,13 @@ cdef class BestSplitter(BaseDenseSplitter):
                                     (self.criterion.weighted_n_right < min_weight_leaf)):
                                 continue
 
+                            # For default MSE
                             # Having derived sum_left and sum_right, calculate interim pseudo impurity improvement as
                             # sum_left(y)^2/n_left + sum_right(y)^2/n_right, higher is better.
                             # Basically mean(y_left)^2 + mean(y_right)^2, higher is better
+                            #
+                            # For tensor basis MSE, impurity improvement becomes (sum_left + sum_right) due to a
+                            # slight definition change of sum_*
                             current_proxy_improvement = self.criterion.proxy_impurity_improvement()
 
                             if current_proxy_improvement > best_proxy_improvement:
@@ -957,18 +953,17 @@ cdef class BaseSparseSplitter(Splitter):
                   const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
                   np.ndarray X_idx_sorted=None,
-                  DOUBLE_t[:, :, ::1] tb = None, DOUBLE_t[:, :, ::1] tb_tb = None, DOUBLE_t[:, ::1] tb_bij = None) \
-            except -1:
+                  DOUBLE_t[:, :, ::1] tb=None) except -1:
         """Initialize the splitter.
-        For tensor basis criterion, tb, tb_tb, tb_bij need to be supplied.
+        For tensor basis criterion, tb needs to be supplied.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
         """
         # Call parent init
-        # Also provide args of tb, tb_tb, and tb_bij even if they're None
+        # Also provide arg of tb even if they're None
         # X_idx_sorted has no effect in Splitter.init()
-        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb, tb_tb, tb_bij)
+        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb)
 
         if not isinstance(X, csc_matrix):
             raise ValueError("X should be in csc format")

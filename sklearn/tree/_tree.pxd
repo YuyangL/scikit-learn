@@ -103,5 +103,5 @@ cdef class TreeBuilder:
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=*,
                 np.ndarray X_idx_sorted=*,
-                np.ndarray tb=*, np.ndarray tb_tb=*, np.ndarray tb_bij=*)
-    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight)
+                np.ndarray tb=*)
+    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight, np.ndarray tb)

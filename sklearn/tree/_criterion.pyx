@@ -845,7 +845,7 @@ cdef class RegressionCriterion(Criterion):
             printf("\nMSE criterion in tensor basis mode... ")
             # Calculate sum_total, i.e. deviatoric SE for samples from start to end index at this node.
             # Results are stored in self.se_dev, and g stored in self.g_node
-            _ = self.reconstructAnisotropyTensor(start, end)
+            _ = self._reconstructAnisotropyTensor(start, end)
             # Then assign self.sum_total to self.se_dev
             memcpy(self.sum_total, self.se_dev, self.n_outputs*sizeof(double))
             # for k in range(self.n_outputs):
@@ -882,7 +882,7 @@ cdef class RegressionCriterion(Criterion):
         self.reset()
         return 0
 
-    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil except -1:
+    cdef int _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil except -1:
         """Reconstruct the anistropy tensor bij_hat of samples in the index list of samples[pos1:pos2] at a node of interest,
         and calculate the deviatoric SE component to mostly replace the functionality of 
         self.sum_total/sum_left/sum_right.
@@ -898,7 +898,7 @@ cdef class RegressionCriterion(Criterion):
         Finally, mostly replace the functionality of self.sum_total/sum_left/sum_right
         from self.sum_*[output] = sum_i^n_samples(yi[output]) to a deviatoric SE,
         se_dev[output] = sum_i^n_samples(2bij[output]*bij_hat[output] - bij_hat[output]^2),
-        where SE = sum_i^n_samples(||yi||^2) + sum(se_dev)."""
+        where SE[output] = sum_i^n_samples(yi[output]^2) - se_dev[output]."""
 
         # Index array (samples) and variables definition
         cdef SIZE_t* samples = self.samples
@@ -910,22 +910,18 @@ cdef class RegressionCriterion(Criterion):
 
         # Reallocate the memory size of dynamic size arrays to number of Tij/bij elements in this node,
         # minimum [10 x 10] (e.g. Tij) or [10 x 1] (e.g. bij).
-        # realloc() tries to perseve old memory as much as possible
+        # realloc() tries to perserve old memory as much as possible
         # -- old addresses' values are untouched and will be overwritten.
         # TODO: not realloc self.ls_work since it doesn't have to be resized?
+        # &self.tb_node refers to the pointer of self.tb_node
         safe_realloc(&self.tb_node, row*10)
         safe_realloc(&self.tb_transpose_node, row*10)
         safe_realloc(&self.bij_node, row)
         safe_realloc(&self.bij_hat_node, row)
 
         # Initialize (or reset) memory block of flattened arrays that involves "+=" to 0
-        # TODO: memset of arrays of no "+=" not necessary?
-        # memset(self.tb_node, 0, row*10*sizeof(double))
-        # memset(self.tb_transpose_node, 0, row*10*sizeof(double))
-        # memset(self.bij_node, 0, row*sizeof(double))
         # # memset(self.tb_bij_node, 0, 10*sizeof(double))
         # # memset(self.tb_tb_node, 0, 100*sizeof(double))
-        # # memset(self.tb_tb_node_fortran, 0, 100*sizeof(double))
         # memset(self.g_node, 0, 10*sizeof(double))
         memset(self.bij_hat_node, 0, row*sizeof(double))
         memset(self.se_dev, 0, n_outputs*sizeof(double))
@@ -988,6 +984,7 @@ cdef class RegressionCriterion(Criterion):
                              self.ls_work, &lwork, &info)
          # Since g[10 x 1] is stored in bij_node after dgelss(),
         # go through each basis and get corresponding g_node at this node
+        # TODO: not sure if bij_node is shrinked from row x 1 to 10 x 1
         for i2 in range(10):
             g_node[i2] = bij_node[i2]
 
@@ -1139,7 +1136,7 @@ cdef class RegressionCriterion(Criterion):
         else:
             # First solve for g for left child node samples
             # pos has been reset to self.start previously in reset()
-            _ = self.reconstructAnisotropyTensor(pos, new_pos)
+            _ = self._reconstructAnisotropyTensor(pos, new_pos)
             # Then assign sum_left to self.se_dev, component by component
             # TODO: what if memcpy(sum_left) instead of memcpy(self.sum_left)?
             memcpy(self.sum_left, self.se_dev, self.n_outputs*sizeof(double))
@@ -1151,7 +1148,7 @@ cdef class RegressionCriterion(Criterion):
                 self.weighted_n_left += w
 
             # Do the same for the right child node samples
-            _ = self.reconstructAnisotropyTensor(new_pos, end)
+            _ = self._reconstructAnisotropyTensor(new_pos, end)
             # TODO: what if memcpy(sum_right) instead of memcpy(self.sum_right)?
             memcpy(self.sum_right, self.se_dev, self.n_outputs*sizeof(double))
             # for k in range(self.n_outputs):

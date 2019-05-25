@@ -80,6 +80,8 @@ cdef class RegressionCriterion(Criterion):
 
     cdef double sq_sum_total
     # Tensor basis related declaration that are used in reconstructAnisotropyTensor()
+    # Tensor basis criterion switch.
+    # If tb is provided in DecisionTreeRegressor.fit(), then tb_mode is 1/True
     cdef bint tb_mode
     # Each pointer has to be declared separately
     cdef double* tb_node
@@ -94,4 +96,4 @@ cdef class RegressionCriterion(Criterion):
     cdef double* ls_work
 
     # Additional function to reconstruct anisotropy tensors
-    cdef int reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil except -1
+    cdef int _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil except -1
