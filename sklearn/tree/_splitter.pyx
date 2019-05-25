@@ -21,6 +21,8 @@ from libc.stdlib cimport free
 from libc.stdlib cimport qsort
 from libc.string cimport memcpy
 from libc.string cimport memset
+# Verbose best.pos for split
+from libc.stdio cimport printf
 
 import numpy as np
 cimport numpy as np
@@ -565,6 +567,8 @@ cdef class BestSplitter(BaseDenseSplitter):
             self.criterion.update(best.pos)
             # Calculate actual impurity improvement based on best.pos
             best.improvement = self.criterion.impurity_improvement(impurity)
+            # Verbose on best split position and impurity improvement
+            printf("\n  Impurity improved %8.8f, split at %d ", best.improvement, best.pos)
             # Calculate children impurity based on best.pos
             self.criterion.children_impurity(&best.impurity_left,
                                              &best.impurity_right)

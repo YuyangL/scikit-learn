@@ -21,6 +21,7 @@ from libc.stdlib cimport free
 from libc.string cimport memcpy
 from libc.string cimport memset
 from libc.math cimport fabs
+# To verbose tensor basis criterion
 from libc.stdio cimport printf
 
 import numpy as np
@@ -701,7 +702,7 @@ cdef class RegressionCriterion(Criterion):
             = (\sum_i^n y_i ** 2) - n_samples * y_bar ** 2
     """
 
-    def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples, bint tb_mode=0):
+    def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples, bint tb_mode=0, bint tb_verbose=0):
         """Initialize parameters for this criterion.
         For
 
@@ -713,9 +714,12 @@ cdef class RegressionCriterion(Criterion):
         n_samples : SIZE_t
             The total number of samples to fit on
 
-        tb_mode : bint
+        tb_mode : bint, optional (default=0)
             On/off flag of tensor basis criterion, based on whether tb is supplied as input in
             DecisionTreeRegressor.fit()
+
+        tb_verbose : bint, optional (default=0)
+            Whether to verbose tensor basis criterion related information for verbose
         """
 
         # Default values
@@ -733,8 +737,8 @@ cdef class RegressionCriterion(Criterion):
         # sq_sum_total is the non-deviatoric part of SE
         self.sq_sum_total = 0.0
 
-        # Tensor basis criterion switch
-        self.tb_mode = tb_mode
+        # Tensor basis criterion switch and verbose option
+        self.tb_mode, self.tb_verbose = tb_mode, tb_verbose
         # ls_lwork for dgelss() is calculated as
         # min(row, col)*3 + max(max(row, col), min(row, col)*2, nrhs)
         # = 30 + max(max(row, 10), 20)
@@ -842,14 +846,12 @@ cdef class RegressionCriterion(Criterion):
         self.sq_sum_total = 0.0
 
         if self.tb_mode:
-            printf("\nMSE criterion in tensor basis mode... ")
             # Calculate sum_total, i.e. deviatoric SE for samples from start to end index at this node.
             # Results are stored in self.se_dev, and g stored in self.g_node
             _ = self._reconstructAnisotropyTensor(start, end)
             # Then assign self.sum_total to self.se_dev
             memcpy(self.sum_total, self.se_dev, self.n_outputs*sizeof(double))
-            # for k in range(self.n_outputs):
-            #     self.sum_total[k] = self.se_dev[k]
+            # printf("\n   Finished TB MSE before split ")
         # If default sum_total behavior, then initialize sum_total to 0 for "+=" later
         else:
             memset(self.sum_total, 0, self.n_outputs * sizeof(double))
@@ -908,6 +910,8 @@ cdef class RegressionCriterion(Criterion):
         cdef SIZE_t nelem_bij_node = (pos2 - pos1)*n_outputs
         # Number of rows in Tij_node and bij_node, has to >= 10 for dgelss()
         cdef int row = max(nelem_bij_node, 10)
+        # Verbose option for debugging
+        cdef bint* verbose = &self.tb_verbose
 
         # Reallocate the memory size of dynamic size arrays to number of Tij/bij elements in this node,
         # minimum [10 x 10] (e.g. Tij) or [10 x 1] (e.g. bij).
@@ -919,6 +923,9 @@ cdef class RegressionCriterion(Criterion):
         safe_realloc(&self.tb_transpose_node, row*10)
         safe_realloc(&self.bij_node, row)
         safe_realloc(&self.bij_hat_node, row)
+        if verbose[0]:
+            printf("\n    Memory reallocation done")
+
 
         # Initialize (or reset) memory block of flattened arrays that involves "+=" to 0
         # # memset(self.tb_bij_node, 0, 10*sizeof(double))
@@ -942,6 +949,9 @@ cdef class RegressionCriterion(Criterion):
         cdef DOUBLE_t* se_dev = self.se_dev
         # TODO: would the following work?
         # cdef DOUBLE_t* tb = &self.tb
+        # The following is only used when debugging
+        cdef DOUBLE_t se = 0.0
+        cdef DOUBLE_t mse
 
         # Least-squares fit dgelss() related variables
         cdef int col = 10
@@ -983,7 +993,10 @@ cdef class RegressionCriterion(Criterion):
                              tb_transpose_node, &lda, bij_node, &ldb,
                              self.ls_s, &rcond, &rank,
                              self.ls_work, &lwork, &info)
-         # Since g[10 x 1] is stored in bij_node after dgelss(),
+        if verbose[0]:
+            printf("\n    g found ")
+
+        # Since g[10 x 1] is stored in bij_node after dgelss(),
         # go through each basis and get corresponding g_node at this node
         # TODO: not sure if bij_node is shrinked from row x 1 to 10 x 1
         for i2 in range(10):
@@ -1050,6 +1063,19 @@ cdef class RegressionCriterion(Criterion):
                 # (M)MSE = sum_1^n_outputs(MSE_ij)/n_outputs
                 se_dev[i1] += 2.0*self.y[i, i1]*bij_hat_node[p0*n_outputs + i1] \
                 - bij_hat_node[p0*n_outputs + i1]**2.0
+                # Calculate SE if debugging is on.
+                # First sum_i^n_samples[sum_i1^n_outputs(y_{i, i1}^2)], the non-deviatoric SE
+                if verbose[0]:
+                    se += self.y[i, i1]*self.y[i, i1]
+
+            # If debugging, remove deviatoric SE from non-deviatoric SE to derive SE
+            if verbose[0]:
+                se -= se_dev[i1]
+
+        # If debugging, calculate (M)MSE and verbose
+        if verbose[0]:
+            mse = se/nelem_bij_node
+            printf("\n    (M)MSE = %8.8f ", mse)
 
         return 0
 
@@ -1141,8 +1167,6 @@ cdef class RegressionCriterion(Criterion):
             # Then assign sum_left to self.se_dev, component by component
             # TODO: what if memcpy(sum_left) instead of memcpy(self.sum_left)?
             memcpy(self.sum_left, self.se_dev, self.n_outputs*sizeof(double))
-            # for k in range(self.n_outputs):
-            #     sum_left[k] = self.se_dev[k]
             # Also get number of samples in left child node, with weight disabled
             for p in range(pos, new_pos):
                 # weighted_n_left has been reset to 0 in reset()
@@ -1152,8 +1176,6 @@ cdef class RegressionCriterion(Criterion):
             _ = self._reconstructAnisotropyTensor(new_pos, end)
             # TODO: what if memcpy(sum_right) instead of memcpy(self.sum_right)?
             memcpy(self.sum_right, self.se_dev, self.n_outputs*sizeof(double))
-            # for k in range(self.n_outputs):
-            #     sum_right[k] = self.se_dev[k]
 
         self.weighted_n_right = (self.weighted_n_node_samples -
                                  self.weighted_n_left)

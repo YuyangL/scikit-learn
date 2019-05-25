@@ -22,6 +22,8 @@ from libc.stdlib cimport free
 from libc.math cimport fabs
 from libc.string cimport memcpy
 from libc.string cimport memset
+# To verbose tree depth
+from libc.stdio cimport printf
 
 import numpy as np
 cimport numpy as np
@@ -227,6 +229,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 start = stack_record.start
                 end = stack_record.end
                 depth = stack_record.depth
+                # Verbosing tree depth
+                printf("\n Depth: %d ", depth)
                 parent = stack_record.parent
                 is_left = stack_record.is_left
                 # Initialized as INFINITY, then impurity becomes each child node's impurity

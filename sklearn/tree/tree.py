@@ -206,6 +206,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         if tb is not None:
             tb = __ensureContiguousDOUBLE(tb)
             self.tb_mode = True
+            print('\nFitting tree in using tensor basis MSE... ')
         else:
             self.tb_mode = False
 
@@ -376,9 +377,9 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                 criterion = CRITERIA_CLF[self.criterion](self.n_outputs_,
                                                          self.n_classes_)
             else:
-                # Addition arg of tb_mode to switch on/off tensor basis criterion
+                # Addition arg of tb_mode to switch on/off tensor basis criterion; and tb_verbose for debugging
                 criterion = CRITERIA_REG[self.criterion](self.n_outputs_,
-                                                         n_samples, self.tb_mode)
+                                                         n_samples, self.tb_mode, self.tb_verbose)
 
         SPLITTERS = SPARSE_SPLITTERS if issparse(X) else DENSE_SPLITTERS
 
@@ -1056,6 +1057,9 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
         When using either a smaller dataset or a restricted depth, this may
         speed up the training.
 
+    tb_verbose : bool, optional (default=False)
+        Whether to verbose tensor basis criterion related information for debugging
+
     Attributes
     ----------
     feature_importances_ : array of shape = [n_features]
@@ -1138,7 +1142,11 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
                  max_leaf_nodes=None,
                  min_impurity_decrease=0.,
                  min_impurity_split=None,
-                 presort=False):
+                 presort=False,
+                 # Verbose tensor basis related information for debugging
+                 tb_verbose=False):
+        # Extra initialization for tensor basis criterion
+        self.tb_verbose = tb_verbose
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1510,6 +1518,9 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
         Best nodes are defined as relative reduction in impurity.
         If None then unlimited number of leaf nodes.
 
+    tb_verbose : bool, optional (default=False)
+        Whether to verbose tensor basis criterio related information for debugging.
+
 
     See also
     --------
@@ -1541,7 +1552,9 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
                  random_state=None,
                  min_impurity_decrease=0.,
                  min_impurity_split=None,
-                 max_leaf_nodes=None):
+                 max_leaf_nodes=None,
+                 # Verbose tensor basis related information for debugging
+                 tb_verbose=False):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1553,4 +1566,6 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
             max_leaf_nodes=max_leaf_nodes,
             min_impurity_decrease=min_impurity_decrease,
             min_impurity_split=min_impurity_split,
-            random_state=random_state)
+            random_state=random_state,
+            # Verbose tensor basis related information for debugging
+            tb_verbose=tb_verbose)

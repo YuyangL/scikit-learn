@@ -83,6 +83,8 @@ cdef class RegressionCriterion(Criterion):
     # Tensor basis criterion switch.
     # If tb is provided in DecisionTreeRegressor.fit(), then tb_mode is 1/True
     cdef bint tb_mode
+    # Turn on verbose in DecisionTreeRegressor.fit() for debugging of tensor basis criterion
+    cdef bint tb_verbose
     # Each pointer has to be declared separately
     cdef double* tb_node
     cdef double* tb_transpose_node
