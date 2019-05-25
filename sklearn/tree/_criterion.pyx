@@ -904,7 +904,8 @@ cdef class RegressionCriterion(Criterion):
         cdef SIZE_t* samples = self.samples
         cdef SIZE_t n_outputs = self.n_outputs
         cdef SIZE_t i1, i2, p, p0, i
-        cdef SIZE_t nelem_bij_node = abs(pos2 - pos1)*n_outputs
+        # abs() not possible for nogil
+        cdef SIZE_t nelem_bij_node = (pos2 - pos1)*n_outputs
         # Number of rows in Tij_node and bij_node, has to >= 10 for dgelss()
         cdef int row = max(nelem_bij_node, 10)
 
