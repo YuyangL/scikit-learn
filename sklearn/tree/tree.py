@@ -206,7 +206,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         if tb is not None:
             tb = __ensureContiguousDOUBLE(tb)
             self.tb_mode = True
-            print('\nFitting tree using tensor basis MSE... ')
+            print('\nFitting DBRT using tensor basis MSE... ')
         else:
             self.tb_mode = False
 

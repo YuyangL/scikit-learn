@@ -568,7 +568,7 @@ cdef class BestSplitter(BaseDenseSplitter):
             # Calculate actual impurity improvement based on best.pos
             best.improvement = self.criterion.impurity_improvement(impurity)
             # Verbose on best split position and impurity improvement
-            printf("\n  Impurity improved %8.8f, split at %d ", best.improvement, best.pos)
+            printf("\n    Impurity improved %8.8f, split at %d ", best.improvement, best.pos)
             # Calculate children impurity based on best.pos
             self.criterion.children_impurity(&best.impurity_left,
                                              &best.impurity_right)

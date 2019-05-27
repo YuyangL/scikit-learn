@@ -995,7 +995,7 @@ cdef class RegressionCriterion(Criterion):
                              self.ls_s, &rcond, &rank,
                              self.ls_work, &lwork, &info)
         if verbose[0]:
-            printf("\n    g solved with exit code %d ", info)
+            printf("\n       g solved with exit code %d ", info)
 
         # Since g[10 x 1] is stored in bij_node after dgelss(),
         # go through each basis and get corresponding g_node at this node
@@ -1075,7 +1075,7 @@ cdef class RegressionCriterion(Criterion):
                 se -= se_dev[i1]
 
             mse = se/nelem_bij_node
-            printf("\n    (M)MSE = %8.8f ", mse)
+            printf("\n       MSE = %8.8f ", mse)
 
         return 0
 
@@ -1164,9 +1164,13 @@ cdef class RegressionCriterion(Criterion):
             # First solve for g for left child node samples
             # pos has been reset to self.start previously in reset()
             if self.tb_verbose:
-                printf("\n   Evaluating deviatoric SE for samples[start:split] of size %d ", (new_pos - pos))
+                printf("\n   Evaluating deviatoric SE for samples[start:split] of size %d ", (new_pos - self.start))
 
-            _ = self._reconstructAnisotropyTensor(pos, new_pos)
+            # In default, sum_left is accumulative,
+            # i.e. sum_left(start:new_pos) is sum_left(start:pos) + sum_left(pos:new_pos),
+            # instead of calculating expensive sum_left(start:new_pos) every time new_pos is supplied.
+            # However, in tensor basis criterion, sum_left has to be calculated in [start:new_pos] every time
+            _ = self._reconstructAnisotropyTensor(self.start, new_pos)
             # Then assign sum_left to self.se_dev, component by component
             # TODO: what if memcpy(sum_left) instead of memcpy(self.sum_left)?
             memcpy(self.sum_left, self.se_dev, self.n_outputs*sizeof(double))
@@ -1178,8 +1182,8 @@ cdef class RegressionCriterion(Criterion):
 
             # Do the same for the right child node samples
             if self.tb_verbose:
-                printf("\n   Evaluating deviatoric SE for samples[split:end] of size %d ", (end - new_pos))
-                
+                printf("\n      Evaluating deviatoric SE for samples[split:end] of size %d ", (end - new_pos))
+
             _ = self._reconstructAnisotropyTensor(new_pos, end)
             # TODO: what if memcpy(sum_right) instead of memcpy(self.sum_right)?
             memcpy(self.sum_right, self.se_dev, self.n_outputs*sizeof(double))
