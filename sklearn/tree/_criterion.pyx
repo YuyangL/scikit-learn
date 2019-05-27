@@ -847,6 +847,9 @@ cdef class RegressionCriterion(Criterion):
         if self.tb_mode:
             # Calculate sum_total, i.e. deviatoric SE for samples from start to end index at this node.
             # Results are stored in self.se_dev, and g stored in self.g_node
+            if self.tb_verbose:
+                printf("\n   Evaluating deviatoric SE for samples[start:end] of size %d ", self.n_node_samples)
+
             _ = self._reconstructAnisotropyTensor(start, end)
             # Then assign self.sum_total to self.se_dev
             memcpy(self.sum_total, self.se_dev, self.n_outputs*sizeof(double))
@@ -922,8 +925,8 @@ cdef class RegressionCriterion(Criterion):
         safe_realloc(&self.tb_transpose_node, row*10)
         safe_realloc(&self.bij_node, row)
         safe_realloc(&self.bij_hat_node, row)
-        if verbose[0]:
-            printf("\n    Memory reallocation done")
+        # if verbose[0]:
+        #     printf("\n    Memory reallocation done")
 
         # Initialize (or reset) memory block of flattened arrays that involves "+=" to 0
         # # memset(self.tb_bij_node, 0, 10*sizeof(double))
@@ -976,7 +979,6 @@ cdef class RegressionCriterion(Criterion):
 
                     # C-contiguous flattened Tij^T, also interpreted as Fortran-contiguous Tij, 10 x n_samples*9.
                     # tb_transpose_node's index is in the order of component -> n_samples -> basis
-                    # FIXME: was this wrong?
                     tb_transpose_node[nelem_bij_node*i2 + p0*n_outputs + i1] = self.tb[i, i1, i2]
 
                 # n_samples*9 x 1
@@ -1067,12 +1069,11 @@ cdef class RegressionCriterion(Criterion):
                 if verbose[0]:
                     se += self.y[i, i1]*self.y[i, i1]
 
-            # If debugging, remove deviatoric SE from non-deviatoric SE to derive SE
-            if verbose[0]:
+        # If debugging, remove deviatoric SE from non-deviatoric SE to derive accumulative SE of all components
+        if verbose[0]:
+            for i1 in range(n_outputs):
                 se -= se_dev[i1]
 
-        # If debugging, calculate (M)MSE and verbose
-        if verbose[0]:
             mse = se/nelem_bij_node
             printf("\n    (M)MSE = %8.8f ", mse)
 
@@ -1162,16 +1163,23 @@ cdef class RegressionCriterion(Criterion):
         else:
             # First solve for g for left child node samples
             # pos has been reset to self.start previously in reset()
+            if self.tb_verbose:
+                printf("\n   Evaluating deviatoric SE for samples[start:split] of size %d ", (new_pos - pos))
+
             _ = self._reconstructAnisotropyTensor(pos, new_pos)
             # Then assign sum_left to self.se_dev, component by component
             # TODO: what if memcpy(sum_left) instead of memcpy(self.sum_left)?
             memcpy(self.sum_left, self.se_dev, self.n_outputs*sizeof(double))
             # Also get number of samples in left child node, with weight disabled
-            for p in range(pos, new_pos):
-                # weighted_n_left has been reset to 0 in reset()
-                self.weighted_n_left += w
+            self.weighted_n_left = new_pos - pos
+            # for p in range(pos, new_pos):
+            #     # weighted_n_left has been reset to 0 in reset()
+            #     self.weighted_n_left += w
 
             # Do the same for the right child node samples
+            if self.tb_verbose:
+                printf("\n   Evaluating deviatoric SE for samples[split:end] of size %d ", (end - new_pos))
+                
             _ = self._reconstructAnisotropyTensor(new_pos, end)
             # TODO: what if memcpy(sum_right) instead of memcpy(self.sum_right)?
             memcpy(self.sum_right, self.se_dev, self.n_outputs*sizeof(double))
