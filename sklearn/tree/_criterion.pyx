@@ -1131,6 +1131,8 @@ cdef class RegressionCriterion(Criterion):
 
         # Default sum_left and sum_right behavior
         if not self.tb_mode:
+            # pos has been reset to self.start previously in reset() at start
+            # and will be new_pos at the end of this function
             if (new_pos - pos) <= (end - new_pos):
                 for p in range(pos, new_pos):
                     i = samples[p]
@@ -1162,7 +1164,6 @@ cdef class RegressionCriterion(Criterion):
         # Else if tensor basis criterion
         else:
             # First solve for g for left child node samples
-            # pos has been reset to self.start previously in reset()
             if self.tb_verbose:
                 printf("\n   Evaluating deviatoric SE for samples[start:split] of size %d ", (new_pos - self.start))
 
@@ -1175,11 +1176,7 @@ cdef class RegressionCriterion(Criterion):
             # TODO: what if memcpy(sum_left) instead of memcpy(self.sum_left)?
             memcpy(self.sum_left, self.se_dev, self.n_outputs*sizeof(double))
             # Also get number of samples in left child node, with weight disabled
-            self.weighted_n_left = new_pos - pos
-            # for p in range(pos, new_pos):
-            #     # weighted_n_left has been reset to 0 in reset()
-            #     self.weighted_n_left += w
-
+            self.weighted_n_left = new_pos - self.start
             # Do the same for the right child node samples
             if self.tb_verbose:
                 printf("\n      Evaluating deviatoric SE for samples[split:end] of size %d ", (end - new_pos))

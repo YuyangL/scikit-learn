@@ -502,7 +502,9 @@ cdef class BestSplitter(BaseDenseSplitter):
 
                         # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
                         #                    X[samples[p], current.feature])
-                        p += 1
+                        # Skip samples to speed up finding best split if in tensor basis criterion
+                        # TODO: decision of min_samples_leaf/4 is random
+                        p += max(1, min_samples_leaf/4) if self.tb is not None else 1
                         # (p >= end) or (X[samples[p], current.feature] >
                         #                X[samples[p - 1], current.feature])
 
