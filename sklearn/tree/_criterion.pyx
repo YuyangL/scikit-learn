@@ -930,7 +930,6 @@ cdef class RegressionCriterion(Criterion):
         # Initialize (or reset) memory block of flattened arrays that involves "+=" to 0
         # # memset(self.tb_bij_node, 0, 10*sizeof(double))
         # # memset(self.tb_tb_node, 0, 100*sizeof(double))
-        # memset(self.g_node, 0, 10*sizeof(double))
         memset(self.bij_hat_node, 0, row*sizeof(double))
         memset(self.se_dev, 0, n_outputs*sizeof(double))
 
@@ -947,7 +946,6 @@ cdef class RegressionCriterion(Criterion):
         cdef DOUBLE_t* g_node = self.g_node
         cdef DOUBLE_t* bij_hat_node = self.bij_hat_node
         cdef DOUBLE_t* se_dev = self.se_dev
-        # TODO: would the following work?
         # cdef DOUBLE_t* tb = &self.tb
         # The following is only used when debugging
         cdef DOUBLE_t se = 0.0
@@ -978,7 +976,9 @@ cdef class RegressionCriterion(Criterion):
                     tb_node[p0*n_outputs*10 + i1*10 + i2] = self.tb[i, i1, i2]
                     # C-contiguous flattened Tij^T, also interpreted as Fortran-contiguous Tij, 10 x n_samples*9.
                     # tb_transpose_node's index is in the order of component -> n_samples -> basis
-                    tb_transpose_node[nelem_bij_node*i2 + p0*n_outputs + i1] = self.tb[i, i1, i2]
+                    tb_transpose_node[p0*n_outputs*10 + i1*10 + i2] = self.tb[i, i2, i1]
+                    # # FIXME: was this wrong?
+                    # tb_transpose_node[nelem_bij_node*i2 + p0*n_outputs + i1] = self.tb[i, i1, i2]
 
                 # n_samples*9 x 1
                 bij_node[p0*n_outputs + i1] = self.y[i, i1]

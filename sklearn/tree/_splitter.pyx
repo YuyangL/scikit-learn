@@ -21,7 +21,7 @@ from libc.stdlib cimport free
 from libc.stdlib cimport qsort
 from libc.string cimport memcpy
 from libc.string cimport memset
-# Verbose best.pos for split
+# Verbose best.pos for split and best.improvement
 from libc.stdio cimport printf
 
 import numpy as np
@@ -1308,8 +1308,8 @@ cdef class BestSparseSplitter(BaseSparseSplitter):
 
         cdef SIZE_t p_next
         cdef SIZE_t p_prev
-        cdef bint is_samples_sorted = 0  # indicate is sorted_samples is
-                                         # inititialized
+        cdef bint is_samples_sorted = 0  # indicate if sorted_samples is
+                                         # initialized
 
         # We assume implicitly that end_positive = end and
         # start_negative = start
@@ -1400,7 +1400,7 @@ cdef class BestSparseSplitter(BaseSparseSplitter):
                     # Evaluate all splits
                     self.criterion.reset()
                     p = start
-
+                    # TODO: with gil for brent optimization?
                     while p < end:
                         if p + 1 != end_negative:
                             p_next = p + 1
