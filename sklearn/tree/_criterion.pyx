@@ -769,7 +769,7 @@ cdef class RegressionCriterion(Criterion):
         # represented by 1D flattened array of memory addresses.
         # The values are initialized as 0
         if tb_mode == 1:
-            self.tb_node = <double*> calloc(n_samples*n_outputs*10, sizeof(double))
+            # self.tb_node = <double*> calloc(n_samples*n_outputs*10, sizeof(double))
             self.tb_transpose_node = <double*> calloc(n_samples*n_outputs*10, sizeof(double))
             self.bij_node = <double*> calloc(n_samples*n_outputs, sizeof(double))
             self.bij_hat_node = <double*> calloc(n_samples*n_outputs, sizeof(double))
@@ -789,8 +789,7 @@ cdef class RegressionCriterion(Criterion):
 
         if tb_mode == 1:
             # Raise memory error for large tensor basis related arrays
-            if (self.tb_node == NULL or
-                self.tb_transpose_node == NULL or
+            if (self.tb_transpose_node == NULL or
                 self.bij_node == NULL or
                 self.bij_hat_node == NULL or
                 self.ls_work == NULL):
@@ -800,7 +799,7 @@ cdef class RegressionCriterion(Criterion):
         """Destructor. Additional destruction of newly introduced tensor basis arrays. Does nothing if array is NULL?"""
         if self.tb_mode == 1:
             # Deallocate tensor basis criterion related memory blocks
-            free(self.tb_node)
+            # free(self.tb_node)
             free(self.tb_transpose_node)
             free(self.bij_node)
             free(self.bij_hat_node)
@@ -919,13 +918,12 @@ cdef class RegressionCriterion(Criterion):
         # -- old addresses' values are untouched and will be overwritten.
         # TODO: not realloc self.ls_work since it doesn't have to be resized?
         # &self.tb_node refers to the pointer of self.tb_node
-        safe_realloc(&self.tb_node, row*10)
+        # safe_realloc(&self.tb_node, row*10)
         safe_realloc(&self.tb_transpose_node, row*10)
         safe_realloc(&self.bij_node, row)
         safe_realloc(&self.bij_hat_node, row)
         if verbose[0]:
             printf("\n    Memory reallocation done")
-
 
         # Initialize (or reset) memory block of flattened arrays that involves "+=" to 0
         # # memset(self.tb_bij_node, 0, 10*sizeof(double))
@@ -937,7 +935,7 @@ cdef class RegressionCriterion(Criterion):
         # Mainly for convenience of dumping "self.".
         # tb_node points to the address self.tb_node.
         # However, ptr[i] will point to the value at ith address in val. When tb_node is changed, self.tb_node is too
-        cdef DOUBLE_t* tb_node = self.tb_node
+        # cdef DOUBLE_t* tb_node = self.tb_node
         cdef DOUBLE_t* tb_transpose_node = self.tb_transpose_node
         cdef DOUBLE_t* bij_node = self.bij_node
         # cdef DOUBLE_t* tb_bij_node = self.tb_bij_node
@@ -964,6 +962,7 @@ cdef class RegressionCriterion(Criterion):
 
         # Flatten Tij, bij and pick up Tij, bij for samples from pos1 to pos2 index at current node,
         # where p is n_samples (3rd axis), i1 is component (row), i2 is basis (column)
+        # TODO: prange necessary?
         for p in range(pos1, pos2):
             # Actual index of the original unsorted X
             i = samples[p]
@@ -971,14 +970,14 @@ cdef class RegressionCriterion(Criterion):
             p0 = p - pos1
             for i1 in range(n_outputs):
                 for i2 in range(10):
-                    # n_samples*9 x 10 flattened to 1D memory addresses, C-contiguous.
-                    # tb_node's index is in the order of basis -> component -> n_samples
-                    tb_node[p0*n_outputs*10 + i1*10 + i2] = self.tb[i, i1, i2]
+                    # # n_samples*9 x 10 flattened to 1D memory addresses, C-contiguous.
+                    # # tb_node's index is in the order of basis -> component -> n_samples
+                    # tb_node[p0*n_outputs*10 + i1*10 + i2] = self.tb[i, i1, i2]
+
                     # C-contiguous flattened Tij^T, also interpreted as Fortran-contiguous Tij, 10 x n_samples*9.
                     # tb_transpose_node's index is in the order of component -> n_samples -> basis
-                    tb_transpose_node[p0*n_outputs*10 + i1*10 + i2] = self.tb[i, i2, i1]
-                    # # FIXME: was this wrong?
-                    # tb_transpose_node[nelem_bij_node*i2 + p0*n_outputs + i1] = self.tb[i, i1, i2]
+                    # FIXME: was this wrong?
+                    tb_transpose_node[nelem_bij_node*i2 + p0*n_outputs + i1] = self.tb[i, i1, i2]
 
                 # n_samples*9 x 1
                 bij_node[p0*n_outputs + i1] = self.y[i, i1]
@@ -994,7 +993,7 @@ cdef class RegressionCriterion(Criterion):
                              self.ls_s, &rcond, &rank,
                              self.ls_work, &lwork, &info)
         if verbose[0]:
-            printf("\n    g found ")
+            printf("\n    g solved with exit code %d ", info)
 
         # Since g[10 x 1] is stored in bij_node after dgelss(),
         # go through each basis and get corresponding g_node at this node
