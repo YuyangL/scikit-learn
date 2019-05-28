@@ -32,7 +32,10 @@ cdef struct SplitRecord:
     double impurity_right  # Impurity of the right split.
 
 # Structs for Brent optimization used to find best split
-ctypedef struct brent_f_args
+ctypedef struct brent_f_args:
+    double arg0
+    double arg1
+
 ctypedef struct zeros_full_output:
     int funcalls
     int iterations
