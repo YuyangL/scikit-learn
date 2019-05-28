@@ -68,6 +68,9 @@ cdef class Criterion:
     cdef void node_value(self, double* dest) nogil
     cdef double impurity_improvement(self, double impurity) nogil
     cdef double proxy_impurity_improvement(self) nogil
+    # Additional function to put self.update(), and self.proxy_impurity_improvement
+    # in a pipeline, for Scipy's brentq()
+    cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""

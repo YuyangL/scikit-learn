@@ -214,6 +214,24 @@ cdef class Criterion:
                           - (self.weighted_n_left /
                              self.weighted_n_node_samples * impurity_left)))
 
+    cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil:
+        """
+        Only used for MSE(RegressionCriterion).
+        Compute the proxy impurity improvement and put Criterion.update() and Criterion.proxy_impurity_improvement in a pipeline.
+        In this way, this function acts as "f" in Scipy's brentq(), Brent optimization to find the best split amongst samples.
+        
+        Parameters
+        ----------
+        split_pos : double
+            The splitting float index of samples at this node, act as "x" in Scipy's brentq()
+
+        Return
+        ------
+        double : best split float index of samples at this node
+        """
+
+        pass
+
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""
@@ -1209,15 +1227,15 @@ cdef class RegressionCriterion(Criterion):
             dest[k] = self.sum_total[k] / self.weighted_n_node_samples
 
     cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil:
-        cdef double current_proxy_improvement = -1.0
+        cdef double current_proxy_improvement
         cdef SIZE_t split_pos_tmp = int(split_pos)
         # TODO: not skipping constant feature values atm.
         #  Could provide void *args to support this feature
 
         _ = self.update(split_pos_tmp)
-        # current_proxy_improvement = self.proxy_impurity_improvement()
+        current_proxy_improvement = self.proxy_impurity_improvement()
 
-        return self.proxy_impurity_improvement()
+        return current_proxy_improvement
 
 
 cdef class MSE(RegressionCriterion):

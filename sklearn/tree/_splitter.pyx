@@ -507,7 +507,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                     # Go through every sample at current node
                     # If split_finder is 'brent', then use Brent optimization to find the best split
                     if self.split_finder == 'brent':
-                        printf("\n    Using Brent optimization to find the best split for samples[%d:%d]", p,
+                        printf("\n    Using Brent optimization to find the best split for samples[%d:%d]... ", p,
                                end)
                         # TODO: explain all args
                         # TODO: last argument full_output is NULL atm
@@ -515,7 +515,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                         best.pos = int(brentq(self.criterion.proxy_impurity_improvement_pipeline,
                                               double(p + 1), double(end - 2),
                                               <brent_f_args *> &args,
-                                              1e-8, 1e-8, 100, NULL))
+                                              1e-7, 1e-7, 100, NULL))
                         # Split value
                         # sum of halves is used to avoid infinite value
                         best.threshold = Xf[best.pos - 1] / 2.0 + Xf[best.pos] / 2.0
