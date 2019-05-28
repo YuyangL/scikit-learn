@@ -382,7 +382,7 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t n_total_constants = n_known_constants
         cdef DTYPE_t current_feature_value
         cdef SIZE_t partition_end
-        cdef brent_f_args args = {}
+        cdef brent_f_args args = NULL
         cdef zeros_full_output full_output
 
         # Initialize "best" SplitRecord incl. its best.pos to end
@@ -515,7 +515,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                         best.pos = int(brentq(self.criterion.proxy_impurity_improvement_pipeline,
                                               double(p + 1), double(end - 2),
                                               <brent_f_args *> &args,
-                                              1e-7, 1e-7, 100, NULL))
+                                              1e-6, 1e-6, 100, NULL))
                         # Split value
                         # sum of halves is used to avoid infinite value
                         best.threshold = Xf[best.pos - 1] / 2.0 + Xf[best.pos] / 2.0
