@@ -512,10 +512,10 @@ cdef class BestSplitter(BaseDenseSplitter):
                         # TODO: explain all args
                         # TODO: last argument full_output is NULL atm
                         # TODO: not skipping constant feature values atm
-                        best.pos = int(brentq(self.criterion.proxy_impurity_improvement_pipeline,
-                                              double(p + 1), double(end - 2),
+                        best.pos = <int> brentq(self.criterion.proxy_impurity_improvement_pipeline,
+                                              <double> (p + 1), <double> (end - 2),
                                               <brent_f_args *> &args,
-                                              1e-6, 1e-6, 100, NULL))
+                                              1e-6, 1e-6, 100, NULL)
                         # Split value
                         # sum of halves is used to avoid infinite value
                         best.threshold = Xf[best.pos - 1] / 2.0 + Xf[best.pos] / 2.0
