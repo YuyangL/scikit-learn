@@ -92,7 +92,11 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                  min_impurity_decrease,
                  min_impurity_split,
                  class_weight=None,
-                 presort=False):
+                 presort=False,
+                 # Verbose when in tensor basis mode for debugging
+                 tb_vervose=False,
+                 # Split finding scheme to find best split amongst samples
+                 split_finder="brute"):
         self.criterion = criterion
         self.splitter = splitter
         self.max_depth = max_depth
@@ -106,6 +110,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         self.min_impurity_split = min_impurity_split
         self.class_weight = class_weight
         self.presort = presort
+        # Initialize extra kwargs too
+        self.tb_verbose, self.split_finder = tb_vervose, split_finder
 
     def get_depth(self):
         """Returns the depth of the decision tree.
@@ -390,7 +396,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                                 min_samples_leaf,
                                                 min_weight_leaf,
                                                 random_state,
-                                                self.presort)
+                                                self.presort,
+                                                self.split_finder)
 
         self.tree_ = Tree(self.n_features_, self.n_classes_, self.n_outputs_)
 
@@ -792,7 +799,9 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
                  min_impurity_decrease=0.,
                  min_impurity_split=None,
                  class_weight=None,
-                 presort=False):
+                 presort=False,
+                 # Ignore tb_verbose, and split_finder kwargs
+                 **kwargs):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1060,6 +1069,12 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
     tb_verbose : bool, optional (default=False)
         Whether to verbose tensor basis criterion related information for debugging
 
+    split_finder : "brute" or "brent" or "1000", optional (default='brute')
+        Whether to use "brute", "brent", "1000" scheme to find the best split amongst samples.
+        "brute" means go through every sample for best split.
+        "brent" means using Brent optimization to find best split.
+        "1000" means limiting maximum number of samples of split to 1000, effectively uniform sampling.
+
     Attributes
     ----------
     feature_importances_ : array of shape = [n_features]
@@ -1144,9 +1159,11 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
                  min_impurity_split=None,
                  presort=False,
                  # Verbose tensor basis related information for debugging
-                 tb_verbose=False):
-        # Extra initialization for tensor basis criterion
-        self.tb_verbose = tb_verbose
+                 tb_verbose=False,
+                 # Provide scheme of finding the best split amongst samples
+                 split_finder="brute"):
+        # Extra initialization for tensor basis criterion and split finder scheme
+        self.tb_verbose, self.split_finder = tb_verbose, split_finder
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1381,7 +1398,9 @@ class ExtraTreeClassifier(DecisionTreeClassifier):
                  max_leaf_nodes=None,
                  min_impurity_decrease=0.,
                  min_impurity_split=None,
-                 class_weight=None):
+                 class_weight=None,
+                 # Ignore tb_verbose and split_finder kwargs
+                 **kwargs):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1519,7 +1538,13 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
         If None then unlimited number of leaf nodes.
 
     tb_verbose : bool, optional (default=False)
-        Whether to verbose tensor basis criterio related information for debugging.
+        Whether to verbose tensor basis criterion related information for debugging
+
+    split_finder : "brute" or "brent" or "1000", optional (default='brute')
+        Whether to use "brute", "brent", "1000" scheme to find the best split amongst samples.
+        "brute" means go through every sample for best split.
+        "brent" means using Brent optimization to find best split.
+        "1000" means limiting maximum number of samples of split to 1000, effectively uniform sampling.
 
 
     See also
@@ -1554,7 +1579,9 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
                  min_impurity_split=None,
                  max_leaf_nodes=None,
                  # Verbose tensor basis related information for debugging
-                 tb_verbose=False):
+                 tb_verbose=False,
+                 # Scheme of finding best split amongst samples
+                 split_finder="brute"):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1568,4 +1595,6 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
             min_impurity_split=min_impurity_split,
             random_state=random_state,
             # Verbose tensor basis related information for debugging
-            tb_verbose=tb_verbose)
+            tb_verbose=tb_verbose,
+            # Scheme of finding best split amongst samples
+            split_finder=split_finder)

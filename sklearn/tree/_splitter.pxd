@@ -31,6 +31,14 @@ cdef struct SplitRecord:
     double impurity_left   # Impurity of the left split.
     double impurity_right  # Impurity of the right split.
 
+# Structs for Brent optimization used to find best split
+ctypedef struct brent_f_args
+ctypedef struct zeros_full_output:
+    int funcalls
+    int iterations
+    int error_num
+    double root
+
 cdef class Splitter:
     # The splitter searches in the input space for a feature and a threshold
     # to split the samples samples[start:end].
@@ -59,6 +67,8 @@ cdef class Splitter:
 
     cdef bint presort                    # Whether to use presorting, only
                                          # allowed on dense data
+    cdef str split_finder                # Whether to use brute force, Brent optimization, or limit total splits to
+    # 1000 to find the best split amongst samples
 
     cdef const DOUBLE_t[:, ::1] y
     cdef DOUBLE_t* sample_weight

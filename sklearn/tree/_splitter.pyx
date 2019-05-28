@@ -29,6 +29,7 @@ cimport numpy as np
 np.import_array()
 
 from scipy.sparse import csc_matrix
+from scipy.optimize.cython_optimize cimport brentq
 
 from ._utils cimport log
 from ._utils cimport rand_int
@@ -62,7 +63,9 @@ cdef class Splitter:
 
     def __cinit__(self, Criterion criterion, SIZE_t max_features,
                   SIZE_t min_samples_leaf, double min_weight_leaf,
-                  object random_state, bint presort):
+                  object random_state, bint presort,
+                  # Split finding scheme
+                  str split_finder="brute"):
         """
         Parameters
         ----------
@@ -84,6 +87,9 @@ cdef class Splitter:
 
         random_state : object
             The user inputted random state to be used for pseudo-randomness
+
+        split_finder : str
+            The split finding scheme, either "brute", "brent", or "1000"
         """
 
         self.criterion = criterion
@@ -101,6 +107,8 @@ cdef class Splitter:
         self.min_weight_leaf = min_weight_leaf
         self.random_state = random_state
         self.presort = presort
+        # Also initialize split_finder
+        self.split_finder = split_finder
 
     def __dealloc__(self):
         """Destructor."""
@@ -257,7 +265,7 @@ cdef class BaseDenseSplitter(Splitter):
 
     def __cinit__(self, Criterion criterion, SIZE_t max_features,
                   SIZE_t min_samples_leaf, double min_weight_leaf,
-                  object random_state, bint presort):
+                  object random_state, bint presort, str split_finder="brute"):
 
         self.X_idx_sorted_ptr = NULL
         self.X_idx_sorted_stride = 0
@@ -321,7 +329,9 @@ cdef class BestSplitter(BaseDenseSplitter):
                                self.min_samples_leaf,
                                self.min_weight_leaf,
                                self.random_state,
-                               self.presort), self.__getstate__())
+                               self.presort,
+                               # Extra kwarg
+                               self.split_finder), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -372,6 +382,8 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t n_total_constants = n_known_constants
         cdef DTYPE_t current_feature_value
         cdef SIZE_t partition_end
+        cdef brent_f_args args = {}
+        cdef zeros_full_output full_output
 
         # Initialize "best" SplitRecord incl. its best.pos to end
         _init_split(&best, end)
@@ -466,7 +478,6 @@ cdef class BestSplitter(BaseDenseSplitter):
                             # Since j is the original unsorted sample index,
                             # get corresponding X value at j for current feature
                             Xf[p] = self.X[j, current.feature]
-                            # TODO: is it necessary to sort tb, tb_tb, tb_bij here too using j following Xf?
                             p += 1
                 else:
                     for i in range(start, end):
@@ -494,59 +505,84 @@ cdef class BestSplitter(BaseDenseSplitter):
                     p = start
 
                     # Go through every sample at current node
-                    while p < end:
-                        # Skip constant feature values
-                        while (p + 1 < end and
-                               Xf[p + 1] <= Xf[p] + FEATURE_THRESHOLD):
-                            p += 1
+                    # If split_finder is 'brent', then use Brent optimization to find the best split
+                    if self.split_finder == 'brent':
+                        printf("\n    Using Brent optimization to find the best split for samples[%d:%d]", p,
+                               end)
+                        # TODO: explain all args
+                        # TODO: last argument full_output is NULL atm
+                        # TODO: not skipping constant feature values atm
+                        best.pos = int(brentq(self.criterion.proxy_impurity_improvement_pipeline,
+                                              double(p + 1), double(end - 2),
+                                              <brent_f_args *> &args,
+                                              1e-8, 1e-8, 100, NULL))
+                        # Split value
+                        # sum of halves is used to avoid infinite value
+                        best.threshold = Xf[best.pos - 1] / 2.0 + Xf[best.pos] / 2.0
+                        # TODO: not sure the usage of this
+                        if ((best.threshold == Xf[best.pos]) or
+                            (best.threshold == INFINITY) or
+                            (best.threshold == -INFINITY)):
+                            # Making sure current split value isn't +-INFINITY anymore
+                            best.threshold = Xf[best.pos - 1]
 
-                        # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
-                        #                    X[samples[p], current.feature])
-                        # Skip samples to speed up finding best split if in tensor basis criterion
-                        # TODO: decision of min_samples_leaf/4 is random
-                        p += max(1, min_samples_leaf/4) if self.tb is not None else 1
-                        # (p >= end) or (X[samples[p], current.feature] >
-                        #                X[samples[p - 1], current.feature])
+                    else:
+                        while p < end:
+                            # Skip constant feature values
+                            while (p + 1 < end and
+                                   Xf[p + 1] <= Xf[p] + FEATURE_THRESHOLD):
+                                p += 1
 
-                        if p < end:
-                            current.pos = p
+                            # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
+                            #                    X[samples[p], current.feature])
+                            # Skip samples to speed up finding best split if split_finder is '1000'
+                            if self.split_finder == '1000':
+                                p += max(1, (end - start)/1000)
+                            else:
+                                p += 1
 
-                            # Reject if min_samples_leaf is not guaranteed
-                            if (((current.pos - start) < min_samples_leaf) or
-                                    ((end - current.pos) < min_samples_leaf)):
-                                continue
+                            # (p >= end) or (X[samples[p], current.feature] >
+                            #                X[samples[p - 1], current.feature])
 
-                            # Derive sum_left, sum_right from current.pos and sum_total
-                            # and set Criterion.pos to current.pos
-                            self.criterion.update(current.pos)
+                            if p < end:
+                                current.pos = p
 
-                            # Reject if min_weight_leaf is not satisfied
-                            if ((self.criterion.weighted_n_left < min_weight_leaf) or
-                                    (self.criterion.weighted_n_right < min_weight_leaf)):
-                                continue
+                                # Reject if min_samples_leaf is not guaranteed
+                                if (((current.pos - start) < min_samples_leaf) or
+                                        ((end - current.pos) < min_samples_leaf)):
+                                    continue
 
-                            # For default MSE
-                            # Having derived sum_left and sum_right, calculate interim pseudo impurity improvement as
-                            # sum_left(y)^2/n_left + sum_right(y)^2/n_right, higher is better.
-                            # Basically mean(y_left)^2 + mean(y_right)^2, higher is better
-                            #
-                            # For tensor basis MSE, impurity improvement becomes (sum_left + sum_right) due to a
-                            # slight definition change of sum_*
-                            current_proxy_improvement = self.criterion.proxy_impurity_improvement()
+                                # Derive and update sum_left, sum_right from current.pos and sum_total
+                                # and set Criterion.pos to current.pos
+                                self.criterion.update(current.pos)
 
-                            if current_proxy_improvement > best_proxy_improvement:
-                                best_proxy_improvement = current_proxy_improvement
-                                # Split value
-                                # sum of halves is used to avoid infinite value
-                                current.threshold = Xf[p - 1] / 2.0 + Xf[p] / 2.0
-                                # TODO: what's 1st condition?
-                                if ((current.threshold == Xf[p]) or
-                                    (current.threshold == INFINITY) or
-                                    (current.threshold == -INFINITY)):
-                                    # Making sure current split value isn't +-INFINITY anymore
-                                    current.threshold = Xf[p - 1]
+                                # Reject if min_weight_leaf is not satisfied
+                                if ((self.criterion.weighted_n_left < min_weight_leaf) or
+                                        (self.criterion.weighted_n_right < min_weight_leaf)):
+                                    continue
 
-                                best = current  # copy
+                                # For default MSE
+                                # Having derived sum_left and sum_right, calculate interim pseudo impurity improvement as
+                                # sum_left(y)^2/n_left + sum_right(y)^2/n_right, higher is better.
+                                # Basically mean(y_left)^2 + mean(y_right)^2, higher is better
+                                #
+                                # For tensor basis MSE, impurity improvement becomes (sum_left + sum_right) due to a
+                                # slight definition change of sum_*
+                                current_proxy_improvement = self.criterion.proxy_impurity_improvement()
+
+                                if current_proxy_improvement > best_proxy_improvement:
+                                    best_proxy_improvement = current_proxy_improvement
+                                    # Split value
+                                    # sum of halves is used to avoid infinite value
+                                    current.threshold = Xf[p - 1] / 2.0 + Xf[p] / 2.0
+                                    # TODO: what's 1st condition?
+                                    if ((current.threshold == Xf[p]) or
+                                        (current.threshold == INFINITY) or
+                                        (current.threshold == -INFINITY)):
+                                        # Making sure current split value isn't +-INFINITY anymore
+                                        current.threshold = Xf[p - 1]
+
+                                    best = current  # copy
 
         # Reorganize into samples[start:best.pos] + samples[best.pos:end]
         if best.pos < end:
@@ -1402,7 +1438,7 @@ cdef class BestSparseSplitter(BaseSparseSplitter):
                     # Evaluate all splits
                     self.criterion.reset()
                     p = start
-                    # TODO: with gil for brent optimization?
+                    # TODO: brent optimization?
                     while p < end:
                         if p + 1 != end_negative:
                             p_next = p + 1

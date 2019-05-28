@@ -1165,7 +1165,7 @@ cdef class RegressionCriterion(Criterion):
         else:
             # First solve for g for left child node samples
             if self.tb_verbose:
-                printf("\n   Evaluating deviatoric SE for samples[start:split] of size %d ", (new_pos - self.start))
+                printf("\n      Evaluating deviatoric SE for samples[start:split] of size %d ", (new_pos - self.start))
 
             # In default, sum_left is accumulative,
             # i.e. sum_left(start:new_pos) is sum_left(start:pos) + sum_left(pos:new_pos),
@@ -1207,6 +1207,17 @@ cdef class RegressionCriterion(Criterion):
 
         for k in range(self.n_outputs):
             dest[k] = self.sum_total[k] / self.weighted_n_node_samples
+
+    cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil:
+        cdef double current_proxy_improvement = -1.0
+        cdef SIZE_t split_pos_tmp = int(split_pos)
+        # TODO: not skipping constant feature values atm.
+        #  Could provide void *args to support this feature
+
+        _ = self.update(split_pos_tmp)
+        # current_proxy_improvement = self.proxy_impurity_improvement()
+
+        return self.proxy_impurity_improvement()
 
 
 cdef class MSE(RegressionCriterion):
