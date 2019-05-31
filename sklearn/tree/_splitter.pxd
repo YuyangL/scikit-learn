@@ -31,16 +31,16 @@ cdef struct SplitRecord:
     double impurity_left   # Impurity of the left split.
     double impurity_right  # Impurity of the right split.
 
-# Structs for Brent optimization used to find best split
-ctypedef struct brent_f_args:
-    double arg0
-    double arg1
-
-ctypedef struct zeros_full_output:
-    int funcalls
-    int iterations
-    int error_num
-    double root
+# # Structs for Brent optimization used to find best split
+# ctypedef struct brent_f_args:
+#     double arg0
+#     double arg1
+#
+# ctypedef struct zeros_full_output:
+#     int funcalls
+#     int iterations
+#     int error_num
+#     double root
 
 cdef class Splitter:
     # The splitter searches in the input space for a feature and a threshold
@@ -102,6 +102,9 @@ cdef class Splitter:
 
     cdef int node_reset(self, SIZE_t start, SIZE_t end,
                         double* weighted_n_node_samples) nogil except -1
+
+    # Additional method to find the best split by using Brent optimization to find min_x f(x)
+    cdef double _brentSplitFinder(self, double a, double b, double epsi=*, double t=*) nogil
 
     cdef int node_split(self,
                         double impurity,   # Impurity of the node

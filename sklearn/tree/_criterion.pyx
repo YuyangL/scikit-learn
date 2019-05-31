@@ -1228,7 +1228,7 @@ cdef class RegressionCriterion(Criterion):
 
     cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil:
         cdef double current_proxy_improvement
-        cdef SIZE_t split_pos_tmp = int(split_pos)
+        cdef SIZE_t split_pos_tmp = <int>split_pos
         # TODO: not skipping constant feature values atm.
         #  Could provide void *args to support this feature
 

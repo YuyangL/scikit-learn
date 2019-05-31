@@ -23,6 +23,7 @@ from libc.string cimport memcpy
 from libc.string cimport memset
 # Verbose best.pos for split and best.improvement
 from libc.stdio cimport printf
+from libc.math cimport sqrt, fabs
 
 import numpy as np
 cimport numpy as np
@@ -231,6 +232,16 @@ cdef class Splitter:
         weighted_n_node_samples[0] = self.criterion.weighted_n_node_samples
         return 0
 
+    cdef double _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
+        """Find the best split x by using Brent's optimization to find local minimum of f(x). 
+        
+        Used in BestSplitter.node_split() if self.split_finder is "brent".
+        
+        This is a placeholder method and is overriden in BaseDenseSplitter(Splitter). 
+        """
+
+        pass
+
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
         """Find the best split on node samples[start:end].
@@ -320,6 +331,179 @@ cdef class BaseDenseSplitter(Splitter):
 
         return 0
 
+    cdef double _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
+        """
+        _brentSplitFinder seeks a local minimum of a function F(X) in an interval [A,B].
+        
+        Discussion:
+        
+        The method used is a combination of golden section search and
+        successive parabolic interpolation.  Convergence is never much slower
+        than that for a Fibonacci search.  If F has a continuous second
+        derivative which is positive at the minimum (which is not at A or
+        B), then convergence is superlinear, and usually of the order of
+        about 1.324....
+        
+        The values EPSI and T define a tolerance TOL = EPSI * abs ( X ) + T.
+        F is never evaluated at two points closer than TOL.
+        
+        If F is a unimodal function and the computed values of F are always
+        unimodal when separated by at least SQEPS * abs ( X ) + (T/3), then
+        LOCAL_MIN approximates the abscissa of the global minimum of F on the
+        interval [A,B] with an error less than 3*SQEPS*abs(LOCAL_MIN)+T.
+        
+        If F is not unimodal, then LOCAL_MIN may approximate a local, but
+        perhaps non-global, minimum to the same accuracy.
+        
+        Thanks to Jonathan Eggleston for pointing out a correction to the 
+        golden section step, 01 July 2013.
+        
+        Licensing:
+        
+        This code is distributed under the GNU LGPL license.
+        
+        Modified:
+        
+        31 May 2019
+        
+        Author:
+        
+        Original FORTRAN77 version by Richard Brent.
+        Python version by John Burkardt.
+        Modified by Yuyang Luan.
+        
+        Reference:
+        
+        Richard Brent,
+        Algorithms for Minimization Without Derivatives,
+        Dover, 2002,
+        ISBN: 0-486-41998-3,
+        LC: QA402.5.B74.
+        
+        Parameters:
+        
+        Input, real A, B, the endpoints of the interval.
+        
+        Input, real EPSI, a positive relative error tolerance.
+        EPSI should be no smaller than twice the relative machine precision,
+        and preferably not much less than the square root of the relative
+        machine precision.
+        
+        Input, real T, a positive absolute error tolerance.
+        
+        Output, real X, the estimated value of an abscissa
+        for which F attains a local minimum value in [A,B].
+        """
+        # Square of the inverse of the golden ratio
+        cdef double c = 0.5*(3 - sqrt(5.))
+        # Lower and upper bound of x
+        cdef double sa = a
+        cdef double sb = b
+        # TODO: what's x, w, v, e
+        # Golden ratio point?
+        cdef double x = sa + c*(b - a)
+        cdef double w = x
+        cdef double v = w
+        cdef double d
+        cdef double e = 0.
+        cdef double fx, fw, fv
+        cdef double m, tol, t2
+        cdef double p, q, r, u
+        fx = self.criterion.proxy_impurity_improvement_pipeline(x)
+        fw = fx
+        fv = fw
+
+        while 1:
+            # Middle point
+            m = 0.5*(sa + sb)
+            # Calculate tolerance
+            tol = epsi*fabs(x) + t
+            # Twice the tolerance
+            t2 = 2.*tol
+            # Check the stopping criterion
+            # When x is close enough to the middle point between sa and sb
+            if fabs(x - m) <= t2 - 0.5*(sb - sa):
+                break
+
+            # Fit a parabola
+            # TODO: what are p, q, r
+            r = 0.
+            q = r
+            p = q
+            # If tolerance is smaller than e
+            if tol < fabs(e):
+                r = (x - w)*(fx - fv)
+                q = (x - v)*(fx - fw)
+                p = (x - v)*q - (x - w)*r
+                q = 2.*(q - r)
+                # Switch sign of p if q > 0
+                p = -p if q > 0 else p
+                # Ensure non-negative q
+                q = fabs(q)
+                r = e
+                # d is defined below
+                e = d
+
+            # TODO: if something happens, use parabolic interpolation
+            if fabs(p) < fabs(0.5*q*r) and \
+                q*(sa - x) < p and \
+                p < q*(sb - x):
+                # Take the parabolic interpolation step
+                d = p/q
+                u = x + d
+                # f(x) must not be evaluated too close to lower or upper bound
+                if (u - sa) < t2 or (sb - u) < t2:
+                    # d is positive if x is left to the middle point
+                    d = tol if x < m else -tol
+
+            # Otherwise, switch to golden-section
+            else:
+                # Since sb is right of x, e is set to positive if x is left to the middle point
+                e = sb - x if x < m else sa - x
+                # d is e*golden ratio
+                d = c*e
+
+            # TODO: why
+            # f(x) must not be evaluated too close to x
+            if tol <= fabs(d):
+                u = x + d
+            elif d > 0:
+                u = x + tol
+            else:
+                u = x - tol
+
+            # Update f(x) after incorporating the tolerance
+            fu = self.criterion.proxy_impurity_improvement_pipeline(u)
+            # Update a, b, v, w, and x
+            # If a lower f(x) is found
+            if fu <= fx:
+                # Then if u is left of x, shrink sb to x, x becomes the new upper bound
+                if u < x:
+                    sb = x
+                # Else if u is right of x, shrink sa to x, x becomes the new lower bound
+                else:
+                    sa = x
+
+                v, fv = w, fw
+                w, fw = x, fx
+                x, fx = u, fu
+            # Else f(u) is not a lower value than f(x)
+            else:
+                # Shrink the bounds, do the opposite of previously
+                if u < x:
+                    sa = u
+                else:
+                    sb = u
+
+                # TODO: what's this
+                if fu <= fw or w == x:
+                    v, fv = w, fw
+                    w, fw = u, fu
+                elif fu <= fv or v == x or v == w:
+                    v, fv = u, fu
+
+        return x
+
 
 cdef class BestSplitter(BaseDenseSplitter):
     """Splitter for finding the best split."""
@@ -382,8 +566,11 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t n_total_constants = n_known_constants
         cdef DTYPE_t current_feature_value
         cdef SIZE_t partition_end
-        cdef brent_f_args args = NULL
-        cdef zeros_full_output full_output
+        cdef double best_pos
+        cdef double brent_start
+        cdef double brent_end
+        cdef double xtol = 1e-4
+        cdef double rtol = 1e-4
 
         # Initialize "best" SplitRecord incl. its best.pos to end
         _init_split(&best, end)
@@ -509,13 +696,10 @@ cdef class BestSplitter(BaseDenseSplitter):
                     if self.split_finder == 'brent':
                         printf("\n    Using Brent optimization to find the best split for samples[%d:%d]... ", p,
                                end)
-                        # TODO: explain all args
-                        # TODO: last argument full_output is NULL atm
                         # TODO: not skipping constant feature values atm
-                        best.pos = <int> brentq(self.criterion.proxy_impurity_improvement_pipeline,
-                                              <double> (p + 1), <double> (end - 2),
-                                              <brent_f_args *> &args,
-                                              1e-6, 1e-6, 100, NULL)
+                        brent_start, brent_end = p + 1, end - 2
+                        best_pos = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
+                        best.pos = <SIZE_t>best_pos
                         # Split value
                         # sum of halves is used to avoid infinite value
                         best.threshold = Xf[best.pos - 1] / 2.0 + Xf[best.pos] / 2.0
