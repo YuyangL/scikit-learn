@@ -30,7 +30,6 @@ cimport numpy as np
 np.import_array()
 
 from scipy.sparse import csc_matrix
-from scipy.optimize.cython_optimize cimport brentq
 
 from ._utils cimport log
 from ._utils cimport rand_int
@@ -276,12 +275,16 @@ cdef class BaseDenseSplitter(Splitter):
 
     def __cinit__(self, Criterion criterion, SIZE_t max_features,
                   SIZE_t min_samples_leaf, double min_weight_leaf,
-                  object random_state, bint presort, str split_finder="brute"):
+                  object random_state, bint presort,
+                  # Additional kwarg
+                  str split_finder="brute"):
 
         self.X_idx_sorted_ptr = NULL
         self.X_idx_sorted_stride = 0
         self.sample_mask = NULL
         self.presort = presort
+        # Additional kwarg
+        self.split_finder = split_finder
 
     def __dealloc__(self):
         """Destructor."""
@@ -333,7 +336,7 @@ cdef class BaseDenseSplitter(Splitter):
 
     cdef double _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
         """
-        _brentSplitFinder seeks a local minimum of a function F(X) in an interval [A,B].
+        _brentSplitFinder seeks a local minimum of a function f(x) in an interval [a, b].
         
         Discussion:
         
@@ -693,7 +696,7 @@ cdef class BestSplitter(BaseDenseSplitter):
 
                     # Go through every sample at current node
                     # If split_finder is 'brent', then use Brent optimization to find the best split
-                    if self.split_finder == 'brent':
+                    if self.split_finder == "brent":
                         printf("\n    Using Brent optimization to find the best split for samples[%d:%d]... ", p,
                                end)
                         # TODO: not skipping constant feature values atm
@@ -711,6 +714,8 @@ cdef class BestSplitter(BaseDenseSplitter):
                             best.threshold = Xf[best.pos - 1]
 
                     else:
+                        printf("\n    Using %s scheme to find the best split for samples[%d:%d]... ",
+                               self.split_finder, p, end)
                         while p < end:
                             # Skip constant feature values
                             while (p + 1 < end and

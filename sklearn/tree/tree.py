@@ -397,6 +397,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                                 min_weight_leaf,
                                                 random_state,
                                                 self.presort,
+                                                # Addition kwarg
                                                 self.split_finder)
 
         self.tree_ = Tree(self.n_features_, self.n_classes_, self.n_outputs_)
