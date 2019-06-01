@@ -574,6 +574,9 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef double brent_end
         cdef double xtol = 1e-4
         cdef double rtol = 1e-4
+        cdef SIZE_t pstep = max(1, (end - start)/1000) if self.split_finder == "1000" else 1
+        cdef str* split_finder = &self.split_finder
+        printf("\n    Using %s scheme to find the best split of each node... ", split_finder[0])
 
         # Initialize "best" SplitRecord incl. its best.pos to end
         _init_split(&best, end)
@@ -697,8 +700,6 @@ cdef class BestSplitter(BaseDenseSplitter):
                     # Go through every sample at current node
                     # If split_finder is 'brent', then use Brent optimization to find the best split
                     if self.split_finder == "brent":
-                        printf("\n    Using Brent optimization to find the best split for samples[%d:%d]... ", p,
-                               end)
                         # TODO: not skipping constant feature values atm
                         brent_start, brent_end = p + 1, end - 2
                         best_pos = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
@@ -714,8 +715,6 @@ cdef class BestSplitter(BaseDenseSplitter):
                             best.threshold = Xf[best.pos - 1]
 
                     else:
-                        printf("\n    Using %s scheme to find the best split for samples[%d:%d]... ",
-                               self.split_finder, p, end)
                         while p < end:
                             # Skip constant feature values
                             while (p + 1 < end and
@@ -725,11 +724,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                             # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
                             #                    X[samples[p], current.feature])
                             # Skip samples to speed up finding best split if split_finder is '1000'
-                            if self.split_finder == '1000':
-                                p += max(1, (end - start)/1000)
-                            else:
-                                p += 1
-
+                            p += pstep
                             # (p >= end) or (X[samples[p], current.feature] >
                             #                X[samples[p - 1], current.feature])
 
