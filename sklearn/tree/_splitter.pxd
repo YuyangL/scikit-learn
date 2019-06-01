@@ -70,8 +70,9 @@ cdef class Splitter:
 
     cdef bint presort                    # Whether to use presorting, only
                                          # allowed on dense data
-    cdef str split_finder                # Whether to use brute force, Brent optimization, or limit total splits to
-    # 1000 to find the best split amongst samples
+    cdef int split_finder_code           # Whether to use brute force, Brent optimization, or limit total splits to
+    # 1000 to find the best split amongst samples.
+    # "Encoded" to integer
 
     cdef const DOUBLE_t[:, ::1] y
     cdef DOUBLE_t* sample_weight

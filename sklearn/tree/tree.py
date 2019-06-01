@@ -376,6 +376,14 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                              ".shape = {})".format(X.shape,
                                                    X_idx_sorted.shape))
 
+        # "Encode" split_finder to integer
+        if self.split_finder == "brent":
+            split_finder_code = 0
+        elif self.split_finder == "1000":
+            split_finder_code = 1000
+        else:
+            split_finder_code = 1
+
         # Build tree
         criterion = self.criterion
         if not isinstance(criterion, Criterion):
@@ -397,8 +405,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                                 min_weight_leaf,
                                                 random_state,
                                                 self.presort,
-                                                # Addition kwarg
-                                                self.split_finder)
+                                                # Additional kwarg
+                                                split_finder_code)
 
         self.tree_ = Tree(self.n_features_, self.n_classes_, self.n_outputs_)
 
@@ -1163,8 +1171,6 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
                  tb_verbose=False,
                  # Provide scheme of finding the best split amongst samples
                  split_finder="brute"):
-        # Extra initialization for tensor basis criterion and split finder scheme
-        self.tb_verbose, self.split_finder = tb_verbose, split_finder
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1177,7 +1183,10 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             random_state=random_state,
             min_impurity_decrease=min_impurity_decrease,
             min_impurity_split=min_impurity_split,
-            presort=presort)
+            presort=presort,
+            # Extra kwargs
+            tb_vervose=tb_verbose,
+            split_finder=split_finder)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
@@ -1399,9 +1408,7 @@ class ExtraTreeClassifier(DecisionTreeClassifier):
                  max_leaf_nodes=None,
                  min_impurity_decrease=0.,
                  min_impurity_split=None,
-                 class_weight=None,
-                 # Ignore tb_verbose and split_finder kwargs
-                 **kwargs):
+                 class_weight=None):
         super().__init__(
             criterion=criterion,
             splitter=splitter,

@@ -64,8 +64,8 @@ cdef class Splitter:
     def __cinit__(self, Criterion criterion, SIZE_t max_features,
                   SIZE_t min_samples_leaf, double min_weight_leaf,
                   object random_state, bint presort,
-                  # Split finding scheme
-                  str split_finder="brute"):
+                  # Split finding scheme "encoded" to integer
+                  int split_finder_code=1):
         """
         Parameters
         ----------
@@ -88,8 +88,8 @@ cdef class Splitter:
         random_state : object
             The user inputted random state to be used for pseudo-randomness
 
-        split_finder : str
-            The split finding scheme, either "brute", "brent", or "1000"
+        split_finder_code : int
+            The split finding scheme "encoded" to integer, either 1: "brute", 0: "brent", or 1000: "1000"
         """
 
         self.criterion = criterion
@@ -108,7 +108,7 @@ cdef class Splitter:
         self.random_state = random_state
         self.presort = presort
         # Also initialize split_finder
-        self.split_finder = split_finder
+        self.split_finder_code = split_finder_code
 
     def __dealloc__(self):
         """Destructor."""
@@ -234,7 +234,7 @@ cdef class Splitter:
     cdef double _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
         """Find the best split x by using Brent's optimization to find local minimum of f(x). 
         
-        Used in BestSplitter.node_split() if self.split_finder is "brent".
+        Used in BestSplitter.node_split() if DecisionTreeRegressor.split_finder is "brent".
         
         This is a placeholder method and is overriden in BaseDenseSplitter(Splitter). 
         """
@@ -277,14 +277,14 @@ cdef class BaseDenseSplitter(Splitter):
                   SIZE_t min_samples_leaf, double min_weight_leaf,
                   object random_state, bint presort,
                   # Additional kwarg
-                  str split_finder="brute"):
+                  int split_finder_code=1):
 
         self.X_idx_sorted_ptr = NULL
         self.X_idx_sorted_stride = 0
         self.sample_mask = NULL
         self.presort = presort
         # Additional kwarg
-        self.split_finder = split_finder
+        self.split_finder_code = split_finder_code
 
     def __dealloc__(self):
         """Destructor."""
@@ -517,8 +517,8 @@ cdef class BestSplitter(BaseDenseSplitter):
                                self.min_weight_leaf,
                                self.random_state,
                                self.presort,
-                               # Extra kwarg
-                               self.split_finder), self.__getstate__())
+                               # Extra arg
+                               self.split_finder_code), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -574,9 +574,13 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef double brent_end
         cdef double xtol = 1e-4
         cdef double rtol = 1e-4
-        cdef SIZE_t pstep = max(1, (end - start)/1000) if self.split_finder == "1000" else 1
-        cdef str* split_finder = &self.split_finder
-        printf("\n    Using %s scheme to find the best split of each node... ", split_finder[0])
+        cdef SIZE_t pstep = max(1, (end - start)/1000) if self.split_finder_code == 1000 else 1
+        if self.split_finder_code == 0:
+            printf("\n    Using Brent optimization to find the best split of each node... ")
+        elif self.split_finder_code == 1000:
+            printf('\n    Using limited brute force to find the best split of each node... ')
+        else:
+            printf('\n    Using brute force to find the best split of each node... ')
 
         # Initialize "best" SplitRecord incl. its best.pos to end
         _init_split(&best, end)
@@ -699,7 +703,7 @@ cdef class BestSplitter(BaseDenseSplitter):
 
                     # Go through every sample at current node
                     # If split_finder is 'brent', then use Brent optimization to find the best split
-                    if self.split_finder == "brent":
+                    if self.split_finder_code == 0:
                         # TODO: not skipping constant feature values atm
                         brent_start, brent_end = p + 1, end - 2
                         best_pos = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
@@ -1157,7 +1161,9 @@ cdef class BaseSparseSplitter(Splitter):
 
     def __cinit__(self, Criterion criterion, SIZE_t max_features,
                   SIZE_t min_samples_leaf, double min_weight_leaf,
-                  object random_state, bint presort):
+                  object random_state, bint presort,
+                  # Extra kwarg
+                  int split_finder_code=1):
         # Parent __cinit__ is automatically called
 
         self.X_data = NULL
@@ -1481,7 +1487,9 @@ cdef class BestSparseSplitter(BaseSparseSplitter):
                                      self.min_samples_leaf,
                                      self.min_weight_leaf,
                                      self.random_state,
-                                     self.presort), self.__getstate__())
+                                     self.presort,
+                                     # Extra arg
+                                     self.split_finder_code), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -1714,7 +1722,9 @@ cdef class RandomSparseSplitter(BaseSparseSplitter):
                                        self.min_samples_leaf,
                                        self.min_weight_leaf,
                                        self.random_state,
-                                       self.presort), self.__getstate__())
+                                       self.presort,
+                                       # Extra arg
+                                       self.split_finder_code), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
