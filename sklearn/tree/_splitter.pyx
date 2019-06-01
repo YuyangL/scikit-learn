@@ -236,7 +236,7 @@ cdef class Splitter:
         
         Used in BestSplitter.node_split() if DecisionTreeRegressor.split_finder is "brent".
         
-        This is a placeholder method and is overriden in BaseDenseSplitter(Splitter). 
+        This is a placeholder method and is overridden in BaseDenseSplitter(Splitter). 
         """
 
         pass
@@ -336,66 +336,55 @@ cdef class BaseDenseSplitter(Splitter):
 
     cdef double _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
         """
-        _brentSplitFinder seeks a local minimum of a function f(x) in an interval [a, b].
+        _brentSplitFinder seeks a local minimum of a function F(X) in an interval [A, B].
+        Modified to use Criterion.proxy_impurity_improvement_pipeline() inherently.
         
         Discussion:
-        
-        The method used is a combination of golden section search and
-        successive parabolic interpolation.  Convergence is never much slower
-        than that for a Fibonacci search.  If F has a continuous second
-        derivative which is positive at the minimum (which is not at A or
-        B), then convergence is superlinear, and usually of the order of
-        about 1.324....
-        
-        The values EPSI and T define a tolerance TOL = EPSI * abs ( X ) + T.
-        F is never evaluated at two points closer than TOL.
-        
-        If F is a unimodal function and the computed values of F are always
-        unimodal when separated by at least SQEPS * abs ( X ) + (T/3), then
-        LOCAL_MIN approximates the abscissa of the global minimum of F on the
-        interval [A,B] with an error less than 3*SQEPS*abs(LOCAL_MIN)+T.
-        
-        If F is not unimodal, then LOCAL_MIN may approximate a local, but
-        perhaps non-global, minimum to the same accuracy.
-        
-        Thanks to Jonathan Eggleston for pointing out a correction to the 
-        golden section step, 01 July 2013.
+            The method used is a combination of golden section search and successive parabolic interpolation. 
+            Convergence is never much slower than that for a Fibonacci search. 
+            If F has a continuous second derivative which is positive at the minimum (which is not at A or B), 
+            then convergence is superlinear, and usually of the order of about 1.324....
+            
+            The values EPSI and T define a tolerance TOL = EPSI * abs ( X ) + T.
+            F is never evaluated at two points closer than TOL.
+            
+            If F is a unimodal function and the computed values of F are always unimodal when separated by at least SQEPS * abs ( X ) + (T/3), 
+            then LOCAL_MIN approximates the abscissa of the global minimum of F on the interval [A,B] with an error less than 3*SQEPS*abs(LOCAL_MIN)+T.
+            
+            If F is not unimodal, then LOCAL_MIN may approximate a local, 
+            but perhaps non-global, minimum to the same accuracy.
+            
+            Thanks to Jonathan Eggleston for pointing out a correction to the golden section step, 01 July 2013.
         
         Licensing:
         
-        This code is distributed under the GNU LGPL license.
+            This code is distributed under the GNU LGPL license.
         
         Modified:
-        
-        31 May 2019
+            31 May 2019
         
         Author:
-        
-        Original FORTRAN77 version by Richard Brent.
-        Python version by John Burkardt.
-        Modified by Yuyang Luan.
+            Original FORTRAN77 version by Richard Brent.
+            Python version by John Burkardt.
+            Modified by Yuyang Luan.
         
         Reference:
-        
-        Richard Brent,
-        Algorithms for Minimization Without Derivatives,
-        Dover, 2002,
-        ISBN: 0-486-41998-3,
-        LC: QA402.5.B74.
+            Richard Brent,
+            Algorithms for Minimization Without Derivatives,
+            Dover, 2002,
+            ISBN: 0-486-41998-3,
+            LC: QA402.5.B74.
         
         Parameters:
-        
-        Input, real A, B, the endpoints of the interval.
-        
-        Input, real EPSI, a positive relative error tolerance.
-        EPSI should be no smaller than twice the relative machine precision,
-        and preferably not much less than the square root of the relative
-        machine precision.
-        
-        Input, real T, a positive absolute error tolerance.
-        
-        Output, real X, the estimated value of an abscissa
-        for which F attains a local minimum value in [A,B].
+            Input, real A, B, the endpoints of the interval.
+            
+            Input, real EPSI, a positive relative error tolerance.
+            EPSI should be no smaller than twice the relative machine precision,
+            and preferably not much less than the square root of the relative machine precision.
+            
+            Input, real T, a positive absolute error tolerance.
+            
+            Output, real X, the estimated value of an abscissa for which F attains a local minimum value in [A, B].
         """
         # Square of the inverse of the golden ratio
         cdef double c = 0.5*(3 - sqrt(5.))
@@ -412,9 +401,11 @@ cdef class BaseDenseSplitter(Splitter):
         cdef double fx, fw, fv
         cdef double m, tol, t2
         cdef double p, q, r, u
+        # Initial f(x)
         fx = self.criterion.proxy_impurity_improvement_pipeline(x)
         fw = fx
         fv = fw
+        printf("\n     Initial f(x) is %8.8f ", fx)
 
         while 1:
             # Middle point
@@ -480,11 +471,14 @@ cdef class BaseDenseSplitter(Splitter):
             # Update a, b, v, w, and x
             # If a lower f(x) is found
             if fu <= fx:
+                printf("\n     Lower f(x) found: %8.8f ", fu)
                 # Then if u is left of x, shrink sb to x, x becomes the new upper bound
                 if u < x:
+                    printf("\n     New upper bound at %8.2f ", x)
                     sb = x
                 # Else if u is right of x, shrink sa to x, x becomes the new lower bound
                 else:
+                    printf("\n     New lower bound at %8.2f ", x)
                     sa = x
 
                 v, fv = w, fw
@@ -705,7 +699,9 @@ cdef class BestSplitter(BaseDenseSplitter):
                     # If split_finder is 'brent', then use Brent optimization to find the best split
                     if self.split_finder_code == 0:
                         # TODO: not skipping constant feature values atm
-                        brent_start, brent_end = p + 1, end - 2
+                        # Before starting Brent optimization,
+                        # ensure left and right bin have at least min_samples_leaf samples
+                        brent_start, brent_end = p + min_samples_leaf, end - min_samples_leaf - 1
                         best_pos = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
                         best.pos = <SIZE_t>best_pos
                         # Split value
