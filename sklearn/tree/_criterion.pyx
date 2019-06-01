@@ -216,18 +216,19 @@ cdef class Criterion:
 
     cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil:
         """
-        Only used for MSE(RegressionCriterion).
-        Compute the proxy impurity improvement and put Criterion.update() and Criterion.proxy_impurity_improvement in a pipeline.
-        In this way, this function acts as "f" in Scipy's brentq(), Brent optimization to find the best split amongst samples.
+        Placeholder for a method in RegressionCriterion(Criterion).
+        Compute the proxy impurity improvement 
+        by putting Criterion.update() and Criterion.proxy_impurity_improvement() in a pipeline.
+        Used in BestSplitter.node_split() for Brent optimization to find the best split.
         
         Parameters
         ----------
         split_pos : double
-            The splitting float index of samples at this node, act as "x" in Scipy's brentq()
+            The splitting double index of samples at this node
 
         Return
         ------
-        double : best split float index of samples at this node
+        double : Pseudo impurity improvement. Higher is better
         """
 
         pass
@@ -908,6 +909,7 @@ cdef class RegressionCriterion(Criterion):
         """Reconstruct the anistropy tensor bij_hat of samples in the index list of samples[pos1:pos2] at a node of interest,
         and calculate the deviatoric SE component to mostly replace the functionality of 
         self.sum_total/sum_left/sum_right.
+        
         First, collect bij (y), and Tij that lies in samples[pos1:pos2] of this node.
         Next, find one set of 10 g that best fit Tij*g = bij for all samples in this node via LS. 
             1). Compress Tij[n_samples x 9 x 10] to Tij[n_samples*9 x 10]
@@ -1058,7 +1060,7 @@ cdef class RegressionCriterion(Criterion):
         #                      tb_tb_node_fortran, &lda, tb_bij_node, &ldb,
         #                      self.ls_s, &rcond, &rank,
         #                      self.ls_work, &lwork, &info)
-        #  # Since g[10 x 1] is stored in tb_bij_node after dgelss(),
+        # # Since g[10 x 1] is stored in tb_bij_node after dgelss(),
         # # go through each basis and get corresponding g_node at this node
         # for i2 in range(10):
         #     g_node[i2] = tb_bij_node[i2]
@@ -1227,12 +1229,28 @@ cdef class RegressionCriterion(Criterion):
             dest[k] = self.sum_total[k] / self.weighted_n_node_samples
 
     cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil:
+        """
+        Pipeline of Criterion.update(pos) -> Criterion.proxy_impurity_improvement().
+        Used by BestSplitter.node_split() to find the best split via Brent optimization.
+        Since higher is better in the output, a reciprocal is taken during Brent optimization to minimize.
+        
+        :param split_pos: The sample split index in the current node, converted to double.
+        :type split_pos: double
+        :return: current_proxy_improvement: Pseudo impurity improvement. 
+        Actual impurity improvement is calculated when best split has been found. Higher is better.
+        :rtype: double
+        """
         cdef double current_proxy_improvement
+        # Cast int type on the double sample split index
         cdef SIZE_t split_pos_tmp = <int>split_pos
         # TODO: not skipping constant feature values atm.
         #  Could provide void *args to support this feature
 
+        # sum_left/right, pos and weighted_n_left/right
+        # are updated using current split index double
         _ = self.update(split_pos_tmp)
+        # For tensor basis criterion, only sum_left/right from Criterion.update() are useful here,
+        # to get pseudo impurity improvement at current split
         current_proxy_improvement = self.proxy_impurity_improvement()
 
         return current_proxy_improvement

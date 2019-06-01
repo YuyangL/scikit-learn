@@ -361,7 +361,7 @@ cdef class BaseDenseSplitter(Splitter):
             This code is distributed under the GNU LGPL license.
         
         Modified:
-            31 May 2019
+            01 June 2019
         
         Author:
             Original FORTRAN77 version by Richard Brent.
@@ -386,8 +386,9 @@ cdef class BaseDenseSplitter(Splitter):
             
             Output, real X, the estimated value of an abscissa for which F attains a local minimum value in [A, B].
         """
+
         # Square of the inverse of the golden ratio
-        cdef double c = 0.5*(3 - sqrt(5.))
+        cdef double c = 0.5*(3. - sqrt(5.))
         # Lower and upper bound of x
         cdef double sa = a
         cdef double sb = b
@@ -403,9 +404,15 @@ cdef class BaseDenseSplitter(Splitter):
         cdef double p, q, r, u
         # Initial f(x)
         fx = self.criterion.proxy_impurity_improvement_pipeline(x)
+        # Since we want to minimize f(x), take the reciprocal of proxy_impurity_improvement
+        # First avoid FPE
+        if -1e-14 < fx < 1e-14:
+            fx = 1e-14 if fx > 0. else -1e-14
+
+        fx = 1./fx
         fw = fx
         fv = fw
-        printf("\n     Initial f(x) is %8.8f ", fx)
+        printf("\n     Initial f(x) is %14.8f ", fx)
 
         while 1:
             # Middle point
@@ -431,7 +438,7 @@ cdef class BaseDenseSplitter(Splitter):
                 p = (x - v)*q - (x - w)*r
                 q = 2.*(q - r)
                 # Switch sign of p if q > 0
-                p = -p if q > 0 else p
+                if q > 0.: p = -p
                 # Ensure non-negative q
                 q = fabs(q)
                 r = e
@@ -461,30 +468,34 @@ cdef class BaseDenseSplitter(Splitter):
             # f(x) must not be evaluated too close to x
             if tol <= fabs(d):
                 u = x + d
-            elif d > 0:
+            elif d > 0.:
                 u = x + tol
             else:
                 u = x - tol
 
             # Update f(x) after incorporating the tolerance
             fu = self.criterion.proxy_impurity_improvement_pipeline(u)
+            # Again, avoid f(u) FPE when getting the reciprocal
+            if -1e-14 < fu < 1e-14:
+                fu = 1e-14 if fu > 0. else -1e-14
+
+            fu = 1./fu
             # Update a, b, v, w, and x
             # If a lower f(x) is found
             if fu <= fx:
-                printf("\n     Lower f(x) found: %8.8f ", fu)
+                printf("\n     Lower f(x) found: %14.8f ", fu)
                 # Then if u is left of x, shrink sb to x, x becomes the new upper bound
                 if u < x:
-                    printf("\n     New upper bound at %8.2f ", x)
                     sb = x
                 # Else if u is right of x, shrink sa to x, x becomes the new lower bound
                 else:
-                    printf("\n     New lower bound at %8.2f ", x)
                     sa = x
 
+                printf("\n     New x bounded to [%8.2f, 8.2f] ", sa, sb)
                 v, fv = w, fw
                 w, fw = x, fx
                 x, fx = u, fu
-            # Else f(u) is not a lower value than f(x)
+            # Else if f(u) is not a lower value than f(x)
             else:
                 # Shrink the bounds, do the opposite of previously
                 if u < x:
@@ -688,10 +699,12 @@ cdef class BestSplitter(BaseDenseSplitter):
                 # if currently non-constant feature
                 else:
                     f_i -= 1
+                    # Let feature[f_i] be current feature
                     features[f_i], features[f_j] = features[f_j], features[f_i]
+                    printf("\n    Current feature is %d ", f_i)
 
                     # Evaluate all splits
-                    # Set sum_left to 0, sum_right to sum_total, and pos to start
+                    # Set sum_left to 0, sum_right to sum_total, and pos to start, for every feature
                     self.criterion.reset()
                     p = start
 
