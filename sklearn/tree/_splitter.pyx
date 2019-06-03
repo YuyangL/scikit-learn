@@ -711,26 +711,26 @@ cdef class BestSplitter(BaseDenseSplitter):
                     p = start
 
                     # Go through every sample at current node
-                    # If split_finder is 'brent', then use Brent optimization to find the best split
+                    # If split_finder is "brent", then use Brent optimization to find the best split
                     if self.split_finder_code == 0:
                         # TODO: not skipping constant feature values atm
                         # Before starting Brent optimization,
                         # ensure left and right bin have at least min_samples_leaf samples
                         brent_start, brent_end = p + min_samples_leaf, end - min_samples_leaf - 1
                         best_pos = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
-                        best.pos = <SIZE_t>best_pos
+                        current.pos = <SIZE_t>best_pos
                         # Split value
                         # sum of halves is used to avoid infinite value
-                        best.threshold = Xf[best.pos - 1] / 2.0 + Xf[best.pos] / 2.0
+                        current.threshold = Xf[current.pos - 1] / 2.0 + Xf[current.pos] / 2.0
                         # TODO: not sure the usage of this
-                        if ((best.threshold == Xf[best.pos]) or
-                            (best.threshold == INFINITY) or
-                            (best.threshold == -INFINITY)):
+                        if ((current.threshold == Xf[current.pos]) or
+                            (current.threshold == INFINITY) or
+                            (current.threshold == -INFINITY)):
                             # Making sure current split value isn't +-INFINITY anymore
-                            best.threshold = Xf[best.pos - 1]
+                            current.threshold = Xf[current.pos - 1]
 
                         best = current  # copy
-
+                    # Else if split_finder is "brute" or "1000"
                     else:
                         while p < end:
                             # Skip constant feature values
