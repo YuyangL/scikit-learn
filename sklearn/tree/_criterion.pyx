@@ -1221,7 +1221,7 @@ cdef class RegressionCriterion(Criterion):
         """Compute the node value of samples[start:end] into dest.
         Definition of dest is changed for tensor basis criterion. By default, dest[k] is mean y[k] at this node.
         However, in tensor basis criterion, dest[k] is deviatoric MSE[k] = MSE[k] - sum_i^n_samples(yi[k]^2)/n_samples, 
-        larger is better."""
+        higher is better."""
 
         cdef SIZE_t k
 

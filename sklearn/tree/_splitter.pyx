@@ -305,7 +305,7 @@ cdef class BaseDenseSplitter(Splitter):
         """
 
         # Call parent init
-        # Additional args of tb, tb_tb, and tb_bij
+        # Additional args of tb
         # X_idx_sorted in Splitter.init() has no effect
         Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb)
 
@@ -348,8 +348,10 @@ cdef class BaseDenseSplitter(Splitter):
             The values EPSI and T define a tolerance TOL = EPSI * abs ( X ) + T.
             F is never evaluated at two points closer than TOL.
             
-            If F is a unimodal function and the computed values of F are always unimodal when separated by at least SQEPS * abs ( X ) + (T/3), 
-            then LOCAL_MIN approximates the abscissa of the global minimum of F on the interval [A,B] with an error less than 3*SQEPS*abs(LOCAL_MIN)+T.
+            If F is a unimodal function and the computed values of F are always unimodal 
+            when separated by at least SQEPS * abs ( X ) + (T/3),
+            then LOCAL_MIN approximates the abscissa of the global minimum of F on the interval [A,B] 
+            with an error less than 3*SQEPS*abs(LOCAL_MIN)+T.
             
             If F is not unimodal, then LOCAL_MIN may approximate a local, 
             but perhaps non-global, minimum to the same accuracy.
@@ -357,7 +359,6 @@ cdef class BaseDenseSplitter(Splitter):
             Thanks to Jonathan Eggleston for pointing out a correction to the golden section step, 01 July 2013.
         
         Licensing:
-        
             This code is distributed under the GNU LGPL license.
         
         Modified:
@@ -402,6 +403,7 @@ cdef class BaseDenseSplitter(Splitter):
         cdef double fx, fw, fv
         cdef double m, tol, t2
         cdef double p, q, r, u
+
         # Initial f(x)
         fx = self.criterion.proxy_impurity_improvement_pipeline(x)
         # Since we want to minimize f(x), take the reciprocal of proxy_impurity_improvement
@@ -491,7 +493,7 @@ cdef class BaseDenseSplitter(Splitter):
                 else:
                     sa = x
 
-                printf("\n     New x bounded to [%8.2f, 8.2f] ", sa, sb)
+                printf("\n     New x bounded to [%8.2f, %8.2f] ", sa, sb)
                 v, fv = w, fw
                 w, fw = x, fx
                 x, fx = u, fu
@@ -653,6 +655,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                 # Current feature index
                 # f_j in the interval [n_total_constants, f_i[
                 current.feature = features[f_j]
+                printf("\n    Current feature is %d ", f_j)
 
                 # Sort samples along that feature; either by utilizing
                 # presorting, or by copying the values into an array and
@@ -701,7 +704,6 @@ cdef class BestSplitter(BaseDenseSplitter):
                     f_i -= 1
                     # Let feature[f_i] be current feature
                     features[f_i], features[f_j] = features[f_j], features[f_i]
-                    printf("\n    Current feature is %d ", f_i)
 
                     # Evaluate all splits
                     # Set sum_left to 0, sum_right to sum_total, and pos to start, for every feature
@@ -726,6 +728,8 @@ cdef class BestSplitter(BaseDenseSplitter):
                             (best.threshold == -INFINITY)):
                             # Making sure current split value isn't +-INFINITY anymore
                             best.threshold = Xf[best.pos - 1]
+
+                        best = current  # copy
 
                     else:
                         while p < end:
@@ -782,6 +786,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                                     best = current  # copy
 
         # Reorganize into samples[start:best.pos] + samples[best.pos:end]
+        printf("\n    Best split is %d with feature %d ", best.pos, best.feature)
         if best.pos < end:
             partition_end = end
             p = start
