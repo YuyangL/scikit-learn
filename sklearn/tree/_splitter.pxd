@@ -74,6 +74,8 @@ cdef class Splitter:
     # 1000 to find the best split amongst samples.
     # "Encoded" to integer
 
+    cdef bint split_verbose              # Verbose in node_split()
+
     cdef const DOUBLE_t[:, ::1] y
     cdef DOUBLE_t* sample_weight
     # Tensor basis criterion related declarations
@@ -105,7 +107,7 @@ cdef class Splitter:
                         double* weighted_n_node_samples) nogil except -1
 
     # Additional method to find the best split by using Brent optimization to find min_x f(x)
-    cdef double _brentSplitFinder(self, double a, double b, double epsi=*, double t=*) nogil
+    cdef (double, double) _brentSplitFinder(self, double a, double b, double epsi=*, double t=*) nogil
 
     cdef int node_split(self,
                         double impurity,   # Impurity of the node

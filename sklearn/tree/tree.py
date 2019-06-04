@@ -94,9 +94,11 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                  class_weight=None,
                  presort=False,
                  # Verbose when in tensor basis mode for debugging
-                 tb_vervose=False,
+                 tb_verbose=False,
                  # Split finding scheme to find best split amongst samples
-                 split_finder="brute"):
+                 split_finder="brute",
+                 # Verbose in BestSplitter.node_split()
+                 split_verbose=False):
         self.criterion = criterion
         self.splitter = splitter
         self.max_depth = max_depth
@@ -111,7 +113,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         self.class_weight = class_weight
         self.presort = presort
         # Initialize extra kwargs too
-        self.tb_verbose, self.split_finder = tb_vervose, split_finder
+        self.tb_verbose, self.split_finder, self.split_verbose = tb_verbose, split_finder, split_verbose
 
     def get_depth(self):
         """Returns the depth of the decision tree.
@@ -405,8 +407,9 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                                 min_weight_leaf,
                                                 random_state,
                                                 self.presort,
-                                                # Additional kwarg
-                                                split_finder_code)
+                                                # Additional args
+                                                split_finder_code,
+                                                self.split_verbose)
 
         self.tree_ = Tree(self.n_features_, self.n_classes_, self.n_outputs_)
 
@@ -808,9 +811,7 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
                  min_impurity_decrease=0.,
                  min_impurity_split=None,
                  class_weight=None,
-                 presort=False,
-                 # Ignore tb_verbose, and split_finder kwargs
-                 **kwargs):
+                 presort=False):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1084,6 +1085,9 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
         "brent" means using Brent optimization to find best split.
         "1000" means limiting maximum number of samples of split to 1000, effectively uniform sampling.
 
+    split_verbose : bool, optional (default=False)
+        Verbose in BestSplitter.node_split() for debugging.
+
     Attributes
     ----------
     feature_importances_ : array of shape = [n_features]
@@ -1170,7 +1174,9 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
                  # Verbose tensor basis related information for debugging
                  tb_verbose=False,
                  # Provide scheme of finding the best split amongst samples
-                 split_finder="brute"):
+                 split_finder="brute",
+                 # Verbose in BestSplitter.node_split()
+                 split_verbose=False):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1186,7 +1192,8 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             presort=presort,
             # Extra kwargs
             tb_vervose=tb_verbose,
-            split_finder=split_finder)
+            split_finder=split_finder,
+            split_verbose=split_verbose)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
@@ -1554,6 +1561,9 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
         "brent" means using Brent optimization to find best split.
         "1000" means limiting maximum number of samples of split to 1000, effectively uniform sampling.
 
+    split_verbose : bool optional (default=False)
+        Verbose in BestSplitter.node_split() for debugging.
+
 
     See also
     --------
@@ -1589,7 +1599,9 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
                  # Verbose tensor basis related information for debugging
                  tb_verbose=False,
                  # Scheme of finding best split amongst samples
-                 split_finder="brute"):
+                 split_finder="brute",
+                 # Verbose in BestSplitter.split_node()
+                 split_verbose=False):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1605,4 +1617,6 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
             # Verbose tensor basis related information for debugging
             tb_verbose=tb_verbose,
             # Scheme of finding best split amongst samples
-            split_finder=split_finder)
+            split_finder=split_finder,
+            # Verbose in BestSplitter.split_node()
+            split_verbose=split_verbose)

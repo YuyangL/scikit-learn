@@ -65,7 +65,9 @@ cdef class Splitter:
                   SIZE_t min_samples_leaf, double min_weight_leaf,
                   object random_state, bint presort,
                   # Split finding scheme "encoded" to integer
-                  int split_finder_code=1):
+                  int split_finder_code=1,
+                  # Verbose on node splitting
+                  bint split_verbose=0):
         """
         Parameters
         ----------
@@ -88,8 +90,11 @@ cdef class Splitter:
         random_state : object
             The user inputted random state to be used for pseudo-randomness
 
-        split_finder_code : int
+        split_finder_code : int, optional (default=1)
             The split finding scheme "encoded" to integer, either 1: "brute", 0: "brent", or 1000: "1000"
+
+        split_verbose : bint, optional (default=0)
+            Verbose in node_split()
         """
 
         self.criterion = criterion
@@ -108,7 +113,7 @@ cdef class Splitter:
         self.random_state = random_state
         self.presort = presort
         # Also initialize split_finder
-        self.split_finder_code = split_finder_code
+        self.split_finder_code, self.split_verbose = split_finder_code, split_verbose
 
     def __dealloc__(self):
         """Destructor."""
@@ -277,14 +282,15 @@ cdef class BaseDenseSplitter(Splitter):
                   SIZE_t min_samples_leaf, double min_weight_leaf,
                   object random_state, bint presort,
                   # Additional kwarg
-                  int split_finder_code=1):
+                  int split_finder_code=1,
+                  bint split_verbose=0):
 
         self.X_idx_sorted_ptr = NULL
         self.X_idx_sorted_stride = 0
         self.sample_mask = NULL
         self.presort = presort
         # Additional kwarg
-        self.split_finder_code = split_finder_code
+        self.split_finder_code, self.split_verbose = split_finder_code, split_verbose
 
     def __dealloc__(self):
         """Destructor."""
@@ -334,10 +340,16 @@ cdef class BaseDenseSplitter(Splitter):
 
         return 0
 
-    cdef double _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
+    cdef (double, double) _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
         """
         _brentSplitFinder seeks a local minimum of a function F(X) in an interval [A, B].
         Modified to use Criterion.proxy_impurity_improvement_pipeline() inherently.
+        Since higher proxy impurity improvement is better, F(x) becomes 1/F(X) to minimize. 
+        F(X) can < 0. In such case, depending on whether F(X) is a fraction:
+            1. -F(X) < 1, i.e. a fraction, 
+            let F(X) = -F(X); then amplify with F(X) = 1/F(X); lastly, penalize with F(X) = 2*F(X)
+            2. -F(X) >= 1,
+            let F(X) = -F(X); then penalize with F(X) = 2*F(X).
         
         Discussion:
             The method used is a combination of golden section search and successive parabolic interpolation. 
@@ -384,7 +396,7 @@ cdef class BaseDenseSplitter(Splitter):
             and preferably not much less than the square root of the relative machine precision.
             
             Input, real T, a positive absolute error tolerance.
-            
+                        
             Output, real X, the estimated value of an abscissa for which F attains a local minimum value in [A, B].
         """
 
@@ -404,18 +416,27 @@ cdef class BaseDenseSplitter(Splitter):
         cdef double m, tol, t2
         cdef double p, q, r, u
 
-        # Initial f(x)
+        # Initial f(x), can be negative
         fx = self.criterion.proxy_impurity_improvement_pipeline(x)
-        # Since we want to minimize f(x), take the reciprocal of proxy_impurity_improvement
+        if self.split_verbose:
+            printf("\n     Initial f(x) is %8.8f ", fx)
+
         # First avoid FPE
         if -1e-14 < fx < 1e-14:
             fx = 1e-14 if fx > 0. else -1e-14
 
-        fx = 1./fx
+        # Since we want to minimize f(x), take the reciprocal of proxy_impurity_improvement
+        if fx > 0.:
+            fx = 1./fx
+        # However, if f(x) was negative
+        else:
+            # If -f(x) < 1, i.e. a fraction, use 1/fraction to amplify it (lower is better)
+            # Else if -f(x) >= 1, use -fx to enlarge it
+            # Finally penalize it with 2 multiplier
+            fx = 2./(-fx) if -fx < 1. else 2.*(-fx)
+
         fw = fx
         fv = fw
-        printf("\n     Initial f(x) is %14.8f ", fx)
-
         while 1:
             # Middle point
             m = 0.5*(sa + sb)
@@ -481,11 +502,15 @@ cdef class BaseDenseSplitter(Splitter):
             if -1e-14 < fu < 1e-14:
                 fu = 1e-14 if fu > 0. else -1e-14
 
-            fu = 1./fu
+            # Again, get reciprocal if positive and penalize if negative
+            if fu > 0.:
+                fu = 1./fu
+            else:
+                fu = 2./(-fu) if -fu < 1. else 2.*(-fu)
+
             # Update a, b, v, w, and x
             # If a lower f(x) is found
             if fu <= fx:
-                printf("\n     Lower f(x) found: %14.8f ", fu)
                 # Then if u is left of x, shrink sb to x, x becomes the new upper bound
                 if u < x:
                     sb = x
@@ -493,7 +518,10 @@ cdef class BaseDenseSplitter(Splitter):
                 else:
                     sa = x
 
-                printf("\n     New x bounded to [%8.2f, %8.2f] ", sa, sb)
+                if self.split_verbose:
+                    printf("\n     Lower |f(x)| found: %14.8f ", fu)
+                    printf("\n     New x bounded to [%8.2f, %8.2f] ", sa, sb)
+
                 v, fv = w, fw
                 w, fw = x, fx
                 x, fx = u, fu
@@ -512,7 +540,7 @@ cdef class BaseDenseSplitter(Splitter):
                 elif fu <= fv or v == x or v == w:
                     v, fv = u, fu
 
-        return x
+        return x, fx
 
 
 cdef class BestSplitter(BaseDenseSplitter):
@@ -525,7 +553,8 @@ cdef class BestSplitter(BaseDenseSplitter):
                                self.random_state,
                                self.presort,
                                # Extra arg
-                               self.split_finder_code), self.__getstate__())
+                               self.split_finder_code,
+                               self.split_verbose), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -582,12 +611,13 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef double xtol = 1e-4
         cdef double rtol = 1e-4
         cdef SIZE_t pstep = max(1, (end - start)/1000) if self.split_finder_code == 1000 else 1
-        if self.split_finder_code == 0:
-            printf("\n    Using Brent optimization to find the best split of each node... ")
-        elif self.split_finder_code == 1000:
-            printf('\n    Using limited brute force to find the best split of each node... ')
-        else:
-            printf('\n    Using brute force to find the best split of each node... ')
+        if self.split_verbose:
+            if self.split_finder_code == 0:
+                printf("\n    Using Brent optimization to find the best split of each node... ")
+            elif self.split_finder_code == 1000:
+                printf('\n    Using limited brute force to find the best split of each node... ')
+            else:
+                printf('\n    Using brute force to find the best split of each node... ')
 
         # Initialize "best" SplitRecord incl. its best.pos to end
         _init_split(&best, end)
@@ -655,7 +685,8 @@ cdef class BestSplitter(BaseDenseSplitter):
                 # Current feature index
                 # f_j in the interval [n_total_constants, f_i[
                 current.feature = features[f_j]
-                printf("\n    Current feature is %d ", f_j)
+                if self.split_verbose:
+                    printf("\n    Current feature is %d ", f_j)
 
                 # Sort samples along that feature; either by utilizing
                 # presorting, or by copying the values into an array and
@@ -717,19 +748,23 @@ cdef class BestSplitter(BaseDenseSplitter):
                         # Before starting Brent optimization,
                         # ensure left and right bin have at least min_samples_leaf samples
                         brent_start, brent_end = p + min_samples_leaf, end - min_samples_leaf - 1
-                        best_pos = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
-                        current.pos = <SIZE_t>best_pos
-                        # Split value
-                        # sum of halves is used to avoid infinite value
-                        current.threshold = Xf[current.pos - 1] / 2.0 + Xf[current.pos] / 2.0
-                        # TODO: not sure the usage of this
-                        if ((current.threshold == Xf[current.pos]) or
-                            (current.threshold == INFINITY) or
-                            (current.threshold == -INFINITY)):
-                            # Making sure current split value isn't +-INFINITY anymore
-                            current.threshold = Xf[current.pos - 1]
+                        # Brent optimization to find best split and corresponding pseudo impurity improvement
+                        best_pos, current_proxy_improvement = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
+                        # For a feature, if improvement is even larger than previous feature, save it
+                        if current_proxy_improvement > best_proxy_improvement:
+                            best_proxy_improvement = current_proxy_improvement
+                            current.pos = <SIZE_t>best_pos
+                            # Split value
+                            # sum of halves is used to avoid infinite value
+                            current.threshold = Xf[current.pos - 1] / 2.0 + Xf[current.pos] / 2.0
+                            # TODO: not sure the usage of this
+                            if ((current.threshold == Xf[current.pos]) or
+                                (current.threshold == INFINITY) or
+                                (current.threshold == -INFINITY)):
+                                # Making sure current split value isn't +-INFINITY anymore
+                                current.threshold = Xf[current.pos - 1]
 
-                        best = current  # copy
+                            best = current  # copy
                     # Else if split_finder is "brute" or "1000"
                     else:
                         while p < end:
@@ -786,7 +821,9 @@ cdef class BestSplitter(BaseDenseSplitter):
                                     best = current  # copy
 
         # Reorganize into samples[start:best.pos] + samples[best.pos:end]
-        printf("\n    Best split is %d with feature %d ", best.pos, best.feature)
+        if self.split_verbose:
+            printf("\n    Best split is %d with feature %d ", best.pos, best.feature)
+
         if best.pos < end:
             partition_end = end
             p = start
@@ -808,7 +845,9 @@ cdef class BestSplitter(BaseDenseSplitter):
             # Calculate actual impurity improvement based on best.pos
             best.improvement = self.criterion.impurity_improvement(impurity)
             # Verbose on best split position and impurity improvement
-            printf("\n    Impurity improved %8.8f, split at %d ", best.improvement, best.pos)
+            if self.split_verbose:
+                printf("\n    Impurity improved %8.8f, split at %d ", best.improvement, best.pos)
+
             # Calculate children impurity based on best.pos
             self.criterion.children_impurity(&best.impurity_left,
                                              &best.impurity_right)
@@ -956,7 +995,10 @@ cdef class RandomSplitter(BaseDenseSplitter):
                                  self.min_samples_leaf,
                                  self.min_weight_leaf,
                                  self.random_state,
-                                 self.presort), self.__getstate__())
+                                 self.presort,
+                                 # Extra kwargs
+                                 self.split_finder_code,
+                                 self.split_verbose), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -1176,8 +1218,9 @@ cdef class BaseSparseSplitter(Splitter):
     def __cinit__(self, Criterion criterion, SIZE_t max_features,
                   SIZE_t min_samples_leaf, double min_weight_leaf,
                   object random_state, bint presort,
-                  # Extra kwarg
-                  int split_finder_code=1):
+                  # Extra kwargs
+                  int split_finder_code=1,
+                  bint split_verbose=0):
         # Parent __cinit__ is automatically called
 
         self.X_data = NULL
@@ -1502,8 +1545,9 @@ cdef class BestSparseSplitter(BaseSparseSplitter):
                                      self.min_weight_leaf,
                                      self.random_state,
                                      self.presort,
-                                     # Extra arg
-                                     self.split_finder_code), self.__getstate__())
+                                     # Extra args
+                                     self.split_finder_code,
+                                     self.split_verbose), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -1737,8 +1781,9 @@ cdef class RandomSparseSplitter(BaseSparseSplitter):
                                        self.min_weight_leaf,
                                        self.random_state,
                                        self.presort,
-                                       # Extra arg
-                                       self.split_finder_code), self.__getstate__())
+                                       # Extra args
+                                       self.split_finder_code,
+                                       self.split_verbose), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:

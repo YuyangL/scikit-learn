@@ -229,8 +229,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 start = stack_record.start
                 end = stack_record.end
                 depth = stack_record.depth
-                # Verbose tree depth
-                printf("\n  Depth: %d ", depth)
+                # # Verbose tree depth
+                # printf("\n  Depth: %d ", depth)
                 parent = stack_record.parent
                 is_left = stack_record.is_left
                 # Initialized as INFINITY, then impurity becomes each child node's impurity
