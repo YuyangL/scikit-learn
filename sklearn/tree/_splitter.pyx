@@ -236,7 +236,7 @@ cdef class Splitter:
         weighted_n_node_samples[0] = self.criterion.weighted_n_node_samples
         return 0
 
-    cdef double _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
+    cdef (double, double) _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
         """Find the best split x by using Brent's optimization to find local minimum of f(x). 
         
         Used in BestSplitter.node_split() if DecisionTreeRegressor.split_finder is "brent".
