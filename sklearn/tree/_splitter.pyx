@@ -236,7 +236,7 @@ cdef class Splitter:
         weighted_n_node_samples[0] = self.criterion.weighted_n_node_samples
         return 0
 
-    cdef (double, double) _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
+    cdef BrentResults _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
         """Find the best split x by using Brent's optimization to find local minimum of f(x). 
         
         Used in BestSplitter.node_split() if DecisionTreeRegressor.split_finder is "brent".
@@ -340,7 +340,7 @@ cdef class BaseDenseSplitter(Splitter):
 
         return 0
 
-    cdef (double, double) _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
+    cdef BrentResults _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
         """
         _brentSplitFinder seeks a local minimum of a function F(X) in an interval [A, B].
         Modified to use Criterion.proxy_impurity_improvement_pipeline() inherently.
@@ -398,6 +398,8 @@ cdef class BaseDenseSplitter(Splitter):
             Input, real T, a positive absolute error tolerance.
                         
             Output, real X, the estimated value of an abscissa for which F attains a local minimum value in [A, B].
+            
+            Output, real FX, the value F(X).
         """
 
         # Square of the inverse of the golden ratio
@@ -415,6 +417,8 @@ cdef class BaseDenseSplitter(Splitter):
         cdef double fx, fw, fv
         cdef double m, tol, t2
         cdef double p, q, r, u
+        # Since there're multiple returns, returns are grouped in BrentResults struct
+        cdef BrentResults returns
 
         # Initial f(x), can be negative
         fx = self.criterion.proxy_impurity_improvement_pipeline(x)
@@ -540,7 +544,9 @@ cdef class BaseDenseSplitter(Splitter):
                 elif fu <= fv or v == x or v == w:
                     v, fv = u, fu
 
-        return x, fx
+        returns.x, returns.fx = x, fx
+
+        return returns
 
 
 cdef class BestSplitter(BaseDenseSplitter):
@@ -585,6 +591,8 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SplitRecord best, current
         cdef double current_proxy_improvement = -INFINITY
         cdef double best_proxy_improvement = -INFINITY
+        # Define a BrentResults struct to catch multiple returns of _brentSplitFinder()
+        cdef BrentResults brent_results
 
         cdef SIZE_t f_i = n_features
         cdef SIZE_t f_j
@@ -749,11 +757,16 @@ cdef class BestSplitter(BaseDenseSplitter):
                         # ensure left and right bin have at least min_samples_leaf samples
                         brent_start, brent_end = p + min_samples_leaf, end - min_samples_leaf - 1
                         # Brent optimization to find best split and corresponding pseudo impurity improvement
-                        best_pos, current_proxy_improvement = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
+                        brent_results = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
+                        # Current proxy improvement is this current feature
+                        # and is not necessarily the best among all features
+                        current_proxy_improvement = brent_results.fx
                         # For a feature, if improvement is even larger than previous feature, save it
                         if current_proxy_improvement > best_proxy_improvement:
                             best_proxy_improvement = current_proxy_improvement
-                            current.pos = <SIZE_t>best_pos
+                            # Update current.pos to best split of current feature,
+                            # which will be inherited by best when all features are searched
+                            current.pos = <SIZE_t>brent_results.x
                             # Split value
                             # sum of halves is used to avoid infinite value
                             current.threshold = Xf[current.pos - 1] / 2.0 + Xf[current.pos] / 2.0
