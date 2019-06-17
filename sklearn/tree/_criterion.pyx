@@ -899,10 +899,12 @@ cdef class RegressionCriterion(Criterion):
                 printf("\n   Evaluating deviatoric SE for samples[start:end] of size %d ", self.n_node_samples)
 
             _ = self._reconstructAnisotropyTensor(start, end)
-            # Then set self.sum_total n_outputs array to self.se_dev scalar
-            memset(self.sum_total, self.se_dev, self.n_outputs*sizeof(double))
-            # printf("\n   Finished TB MSE before split ")
-        # If default sum_total behavior, then initialize sum_total to 0 for "+=" later
+            # Then set self.sum_total n_outputs array to self.se_dev scalar.
+            # memset only accept int value for initialization thus not using it
+            for k in range(self.n_outputs):
+                self.sum_total[k] = self.se_dev
+
+        # Else if default sum_total behavior, then initialize sum_total to 0 for "+=" later
         else:
             memset(self.sum_total, 0, self.n_outputs * sizeof(double))
 
@@ -1240,8 +1242,11 @@ cdef class RegressionCriterion(Criterion):
             # instead of calculating expensively sum_left(start:new_pos) every time new_pos is supplied.
             # However, in tensor basis criterion, sum_left has to be calculated in [start:new_pos] every time
             _ = self._reconstructAnisotropyTensor(self.start, new_pos)
-            # Then set sum_left n_outputs array to self.se_dev scalar
-            memset(sum_left, self.se_dev, self.n_outputs*sizeof(double))
+            # Then set sum_left n_outputs array to self.se_dev scalar.
+            # memset only accepts int values for initialization thus not using it
+            for k in range(self.n_outputs):
+                self.sum_left[k] = self.se_dev
+
             # Also get number of samples in left child node, with weight disabled
             self.weighted_n_left = new_pos - self.start
             # Do the same for the right child node samples
@@ -1249,7 +1254,8 @@ cdef class RegressionCriterion(Criterion):
                 printf("\n      Evaluating deviatoric SE for samples[split:end] of size %d ", (end - new_pos))
 
             _ = self._reconstructAnisotropyTensor(new_pos, end)
-            memset(sum_right, self.se_dev, self.n_outputs*sizeof(double))
+            for k in range(self.n_outputs):
+                self.sum_right[k] = self.se_dev
 
         self.weighted_n_right = (self.weighted_n_node_samples -
                                  self.weighted_n_left)

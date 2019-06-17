@@ -1332,20 +1332,22 @@ cdef class BaseSparseSplitter(Splitter):
 
     cdef int init(self,
                   object X,
-                  const DOUBLE_t[:, ::1] y,
+                  DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
                   np.ndarray X_idx_sorted=None,
-                  DOUBLE_t[:, :, ::1] tb=None) except -1:
+                  DOUBLE_t[:, :, ::1] tb=None,
+                  DOUBLE_t[:, ::1] bij=None) except -1:
         """Initialize the splitter.
-        For tensor basis criterion, tb needs to be supplied.
+        For tensor basis criterion, tensor basis tb and anisotropy tensor bij need to be supplied,
+        and y is only used to store best 10 tensor basis coefficients g.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
         """
         # Call parent init
-        # Also provide arg of tb even if they're None
+        # Also provide arg of tb and bij even if they're None
         # X_idx_sorted has no effect in Splitter.init()
-        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb)
+        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb, bij)
 
         if not isinstance(X, csc_matrix):
             raise ValueError("X should be in csc format")

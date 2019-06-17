@@ -72,9 +72,11 @@ cdef class Criterion:
     cdef void node_value(self, double* dest) nogil
     cdef double impurity_improvement(self, double impurity) nogil
     cdef double proxy_impurity_improvement(self) nogil
-    # Additional function to put self.update(), and self.proxy_impurity_improvement
-    # in a pipeline, for Scipy's brentq()
+    # Additional method to put self.update() and self.proxy_impurity_improvement
+    # in a pipeline, for Brent optimization of finding best split
     cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil
+    # Additional method to reconstruct anisotropy tensors
+    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""
@@ -104,6 +106,3 @@ cdef class RegressionCriterion(Criterion):
     cdef double* ls_s
     cdef double* ls_work
     cdef int* ls_iwork
-
-    # Additional function to reconstruct anisotropy tensors
-    cdef int _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil except -1

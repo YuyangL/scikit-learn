@@ -21,6 +21,8 @@ from ._tree cimport INT32_t          # Signed 32 bit integer
 from ._tree cimport UINT32_t         # Unsigned 32 bit integer
 
 cdef struct SplitRecord:
+    # TODO: consider storing g here instead of y
+    #  something like g_l and g_r
     # Data to track sample split
     SIZE_t feature         # Which feature to split on.
     SIZE_t pos             # Split samples array at the given position,
