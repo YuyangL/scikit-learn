@@ -95,16 +95,22 @@ cdef class TreeBuilder:
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
-                np.ndarray tb=None):
+                # Extra kwargs
+                np.ndarray tb=None,
+                np.ndarray bij=None):
         """Build a decision tree from the training set (X, y).
-        If using tensor basis criterion, then tensor basis tb needs to be supplied."""
+        If using tensor basis criterion, then tensor basis tb and anisotropy tensor bij need to be supplied,
+        and y is only used to store best 10 tensor basis coefficients g."""
         pass
 
     cdef inline _check_input(self, object X, np.ndarray y,
                              np.ndarray sample_weight,
-                             np.ndarray tb):
+                             # Extra kwargs
+                             np.ndarray tb=None,
+                             np.ndarray bij=None):
         """Check input dtype, layout and format.
-        Additional check of tensor basis tb, if it's not None."""
+        Additional check of tensor basis tb and anisotropy tensor bij, 
+        if they're not all None."""
         if issparse(X):
             X = X.tocsc()
             X.sort_indices()
@@ -120,8 +126,24 @@ cdef class TreeBuilder:
             # since we have to copy we will make it fortran for efficiency
             X = np.asfortranarray(X, dtype=DTYPE)
 
-        if y.dtype != DOUBLE or not y.flags.contiguous:
-            y = np.ascontiguousarray(y, dtype=DOUBLE)
+        # If tb and bij are both provided,
+        # make sure y is shape (n_samples, 10) to store g later
+        # and make sure they have np.float64 (DOUBLE) dtype and are C-contiguous
+        if tb is not None and bij is not None:
+            if tb.dtype != DOUBLE or not tb.flags.contiguous:
+               tb = np.ascontiguousarray(tb, dtype=DOUBLE)
+
+            if bij.dtype != DOUBLE or not bij.flags.contiguous:
+                bij = np.ascontiguousarray(bij, dtype=DOUBLE)
+
+            if np.shape(y) != (X.shape[0], 10): y = np.zeros((X.shape[0], 10))
+            if y.dtype != DOUBLE or not y.flags.contiguous:
+                y = np.ascontiguousarray(y, dtype=DOUBLE)
+
+        # Otherwise, only check y
+        else:
+            if y.dtype != DOUBLE or not y.flags.contiguous:
+                y = np.ascontiguousarray(y, dtype=DOUBLE)
 
         if (sample_weight is not None and
             (sample_weight.dtype != DOUBLE or
@@ -129,12 +151,8 @@ cdef class TreeBuilder:
                 sample_weight = np.asarray(sample_weight, dtype=DOUBLE,
                                            order="C")
 
-        # If tb is provided, make sure it has np.float64 (DOUBLE) dtype and is C-contiguous
-        if tb is not None and (tb.dtype != DOUBLE or not tb.flags.contiguous):
-            tb = np.ascontiguousarray(tb, dtype=DOUBLE)
-
         # Additional return of checked tb
-        return X, y, sample_weight, tb
+        return X, y, sample_weight, tb, bij
 
 # Depth first builder ---------------------------------------------------------
 
@@ -156,12 +174,16 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
-                np.ndarray tb=None):
+                # Extra kwargs
+                np.ndarray tb=None,
+                np.ndarray bij=None):
         """Build a decision tree from the training set (X, y).
-        If using tensor basis criterion, then tb needs to be supplied"""
+        If using tensor basis criterion, 
+        then tensor basis tb and anisotropy tensor bij need to be supplied,
+        and y is only to store best 10 tensor basis coefficients g."""
 
-        # check input, incl. tb
-        X, y, sample_weight, tb = self._check_input(X, y, sample_weight, tb)
+        # check input, incl. tb, bij
+        X, y, sample_weight, tb, bij = self._check_input(X, y, sample_weight, tb, bij)
 
         cdef DOUBLE_t* sample_weight_ptr = NULL
         if sample_weight is not None:
@@ -188,7 +210,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
 
         # Recursive partition (without actual recursion)
         # Supply tb regardless whether it'll be used
-        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb)
+        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb, bij)
 
         cdef SIZE_t start
         cdef SIZE_t end
@@ -278,7 +300,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 # Store value for all nodes, to facilitate tree/model
                 # inspection and interpretation.
                 # If using tensor basis criterion, definition of node value is changed from mean y at this node to
-                # deviatoric MSE = MSE - sum_i^n_samples(yi^2)/n_samples
+                # deviatoric MSE scalar
+                # = sum^n_samples[sum^n_components(2bij*bij_hat - bij_hat^2)]/n_samples
                 splitter.node_value(tree.value + node_id * tree.value_stride)
 
                 if not is_leaf:
@@ -346,12 +369,15 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
-                np.ndarray tb = None):
+                # Extra kwargs
+                np.ndarray tb=None,
+                np.ndarray bij=None):
         """Build a decision tree from the training set (X, y).
-        If using tensor basis criterion, tensor basis tb needs to be supplied"""
+        If using tensor basis criterion, tensor basis tb and anisotropy tensor bij need to be supplied,
+        and y is only used to store best 10 tensor basis coefficients g."""
 
-        # check input, incl. tb
-        X, y, sample_weight, tb = self._check_input(X, y, sample_weight, tb)
+        # check input, incl. tb, bij
+        X, y, sample_weight, tb, bij = self._check_input(X, y, sample_weight, tb, bij)
 
         cdef DOUBLE_t* sample_weight_ptr = NULL
         if sample_weight is not None:
@@ -365,8 +391,8 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         cdef SIZE_t min_samples_split = self.min_samples_split
 
         # Recursive partition (without actual recursion)
-        # Supply tb regardless whether it'll be used
-        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb)
+        # Supply tb, bij regardless whether they'll be used
+        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb, bij)
 
         cdef PriorityHeap frontier = PriorityHeap(INITIAL_STACK_SIZE)
         cdef PriorityHeapRecord record
@@ -507,7 +533,9 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
             return -1
 
         # compute values also for split nodes (might become leafs later).
-        # The definition of the node value is changed if using tensor basis criterion
+        # The definition of the node value is changed if using tensor basis criterion from calculating mean y to
+        # deviatoric MSE scalar
+        # = sum^n_samples[sum^n_components(2bij*bij_hat - bij_hat^2)]/n_samples.
         splitter.node_value(tree.value + node_id * tree.value_stride)
 
         res.node_id = node_id

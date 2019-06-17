@@ -132,9 +132,10 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
-            tb=None):
+            tb=None, bij=None):
         """
-        If using tensor basis criterion, tensor basis tb needs to be supplied.
+        If using tensor basis criterion, tensor basis tb and anisotropy tensor bij need to be supplied,
+        y is only used to store best 10 tensor basis coefficients g.
         """
         random_state = check_random_state(self.random_state)
         if check_input:
@@ -191,11 +192,13 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         def __ensureContiguousDOUBLE(arr, dtype=DOUBLE):
             """
-            Function to ensure arr is C-contiguous with np.float64 (DOUBLE) dtype
+            Function to ensure arr is C-contiguous with np.float64 (DOUBLE) dtype.
+
             :param arr: Array of choice
             :type arr: np.ndarray
             :param dtype: Data type, default DOUBLE (np.float64)
             :type dtype: Numpy dtype
+
             :return: C-contiguous array with np.float64 dtype
             :rtype: np.ndarray(dtype=np.float64)
             """
@@ -211,10 +214,11 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # Check for tensor basis array input.
         # Also make sure tb is C-contiguous and np.float64, if it's not None
         # tb_mode will be used for Criterion.__cinit__()
-        if tb is not None:
+        if tb is not None and bij is not None:
             tb = __ensureContiguousDOUBLE(tb)
+            bij = __ensureContiguousDOUBLE(bij)
             self.tb_mode = True
-            print('\nFitting DBRT using tensor basis MSE... ')
+            print('\nFitting DBRT using tensor basis MSE criterion. \nBest tensor basis coefficients g are stored in y ')
         else:
             self.tb_mode = False
 
@@ -309,11 +313,15 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                  "number of samples=%d" %
                                  (len(sample_weight), n_samples))
 
-        # If tensor basis mode on, check for length of tb too
+        # If tensor basis mode on, check for length of tb and bij too
         if self.tb_mode:
             if len(tb) != n_samples:
                 raise ValueError("Number of tensor basis set=%d does not match "
                                  "number of samples=%d"%(len(tb), n_samples))
+
+            if len(bij) != n_samples:
+                raise ValueError("Number of anisotropy tensor =%d does not match "
+                                 "number of samples=%d"%(len(bij), n_samples))
 
         if expanded_class_weight is not None:
             if sample_weight is not None:
@@ -430,8 +438,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                            self.min_impurity_decrease,
                                            min_impurity_split)
 
-        # Addition of args of tb
-        builder.build(self.tree_, X, y, sample_weight, X_idx_sorted, tb)
+        # Addition of args of tb and bij regardless whether they are None
+        builder.build(self.tree_, X, y, sample_weight, X_idx_sorted, tb, bij)
 
         if self.n_outputs_ == 1:
             self.n_classes_ = self.n_classes_[0]
@@ -830,7 +838,6 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None, **kwargs):
         """Build a decision tree classifier from the training set (X, y).
-        Tensor basis criterion doesn't work for classifier so tb, tb_tb, tb_bij have no effect here.
 
         Parameters
         ----------
@@ -869,8 +876,7 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
             X, y,
             sample_weight=sample_weight,
             check_input=check_input,
-            X_idx_sorted=X_idx_sorted,
-            tb=None)
+            X_idx_sorted=X_idx_sorted)
         return self
 
     def predict_proba(self, X, check_input=True):
@@ -1191,13 +1197,13 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             min_impurity_split=min_impurity_split,
             presort=presort,
             # Extra kwargs
-            tb_vervose=tb_verbose,
+            tb_verbose=tb_verbose,
             split_finder=split_finder,
             split_verbose=split_verbose)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
-            tb=None):
+            tb=None, bij=None):
         """Build a decision tree regressor from the training set (X, y).
         If using tensor basis criterion, tb, tb_tb, tb_bij need to be supplied.
 
@@ -1211,7 +1217,8 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
         y : array-like, shape = [n_samples] or [n_samples, n_outputs]
             The target values (real numbers). Use ``dtype=np.float64`` and
             ``order='C'`` for maximum efficiency.
-            If using tensor basis criterion, then y should be anisotropy tensor of shape [n_samples, 9].
+            If using tensor basis criterion, then y can be any array of shape (n_samples, 10)
+            and is used to store best 10 tensor basis coefficients g for each node.
 
         sample_weight : array-like, shape = [n_samples] or None
             Sample weights. If None, then samples are equally weighted. Splits
@@ -1232,6 +1239,10 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
         tb : array-like, shape = [n_samples, 9, 10], or None, optional
             Tensor basis Tij, used for MSE tensor basis criterion. If None, then tensor basis mode is off.
 
+        bij : array-like, shape = [n_samples, 9], or None, optional
+            Anisotropy tensor ground truth bij, used for MSE tensor basis criterion.
+            If None, then tensor basis mode is off.
+
         Returns
         -------
         self : object
@@ -1243,7 +1254,8 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             sample_weight=sample_weight,
             check_input=check_input,
             X_idx_sorted=X_idx_sorted,
-            tb=tb)
+            tb=tb,
+            bij=bij)
         return self
 
 

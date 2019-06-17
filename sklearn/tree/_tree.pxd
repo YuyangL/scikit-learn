@@ -99,9 +99,11 @@ cdef class TreeBuilder:
     cdef double min_impurity_split
     cdef double min_impurity_decrease   # Impurity threshold for early stopping
 
-    # Addition of kwargs of tb, tb_tb, and tb_bij
+    # Additional kwargs of tb, bij
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=*,
                 np.ndarray X_idx_sorted=*,
-                np.ndarray tb=*)
-    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight, np.ndarray tb)
+                np.ndarray tb=*,
+                np.ndarray bij=*)
+    # Additional kwargs of tb, bij
+    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight, np.ndarray tb=*, np.ndarray bij=*)

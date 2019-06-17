@@ -24,9 +24,11 @@ cdef class Criterion:
     # such as the mean in regression and class probabilities in classification.
 
     # Internal structures
+    # Since in tensor basis criterion, y is g which is changing, y is not constant
     cdef const DOUBLE_t[:, ::1] y        # Values of y
-    # Tensor inputs declaration
+    # Tensor basis inputs declaration
     cdef DOUBLE_t[:, :, ::1] tb
+    cdef DOUBLE_t[:, ::1] bij
     cdef DOUBLE_t* sample_weight         # Sample weights
 
     cdef SIZE_t* samples                 # Sample indices in X, y
@@ -54,11 +56,13 @@ cdef class Criterion:
     # statistics correspond to samples[start:pos] and samples[pos:end].
 
     # Methods
-    # Added kwarg of tb
+    # Added kwargs of tb, bij
+    # Since in tensor basis criterion, y is g and changing, y is not constant
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb=*) nogil except -1
+                  DOUBLE_t[:, :, ::1] tb=*,
+                  DOUBLE_t[:, ::1] bij=*) nogil except -1
     cdef int reset(self) nogil except -1
     cdef int reverse_reset(self) nogil except -1
     cdef int update(self, SIZE_t new_pos) nogil except -1
@@ -83,6 +87,8 @@ cdef class RegressionCriterion(Criterion):
 
     cdef double sq_sum_total
     # Tensor basis related declaration that are used in reconstructAnisotropyTensor()
+    # Deviatoric SE scalar, used to replace functionality of sum_total/left/right
+    cdef double se_dev
     # Tensor basis criterion switch.
     # If tb is provided in DecisionTreeRegressor.fit(), then tb_mode is 1/True
     cdef bint tb_mode
@@ -94,11 +100,10 @@ cdef class RegressionCriterion(Criterion):
     cdef double* bij_node
     cdef double* bij_hat_node
     cdef double* g_node
-    cdef double* se_dev
-    # dgelss() related declaration
+    # dgelsd() related declaration
     cdef double* ls_s
-    cdef SIZE_t ls_lwork
     cdef double* ls_work
+    cdef int* ls_iwork
 
     # Additional function to reconstruct anisotropy tensors
     cdef int _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil except -1

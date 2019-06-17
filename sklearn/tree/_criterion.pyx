@@ -20,7 +20,7 @@ from libc.stdlib cimport calloc
 from libc.stdlib cimport free
 from libc.string cimport memcpy
 from libc.string cimport memset
-from libc.math cimport fabs
+from libc.math cimport fabs, log2, lround
 # To verbose tensor basis criterion
 from libc.stdio cimport printf
 
@@ -58,10 +58,12 @@ cdef class Criterion:
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb=None) nogil except -1:
+                  # Additional kwargs
+                  DOUBLE_t[:, :, ::1] tb=None,
+                  DOUBLE_t[:, ::1] bij=None) nogil except -1:
         # TODO: necessary to make sure init() here and init() in RegressionCriterion has same signatures?
         """Placeholder for a method which will initialize the criterion.
-        For tensor basis criterion, tb, tb_tb, and tb_bij need to be supplied.
+        For tensor basis criterion, tb, bij need to be supplied and y (which is derived best g) is not used.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -83,6 +85,8 @@ cdef class Criterion:
             The last sample used on this node
         tb : array-like, dtype=DOUBLE_t, or None
             Tensor basis matrix T, n_samples x 9 components x 10 bases, used for tensor basis criterion
+        bij : array-like, dtype=DOUBLE_t, or None
+            Anisotropy tensor bij, n_samples x 9 components, used for tensor basis criterion
         """
 
         pass
@@ -214,6 +218,27 @@ cdef class Criterion:
                           - (self.weighted_n_left /
                              self.weighted_n_node_samples * impurity_left)))
 
+    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil:
+        """
+        Placeholder for a method in RegressionCriterion(Criterion).
+        
+        Compute 10 tensor basis coefficients g and deviatoric summed square error se_dev that replaces the 
+        functionality of sum_total/left/right.
+        
+        Parameters
+        ----------
+        pos1 : SIZE_t
+            The starting index of the sorted samples
+        pos2 : SIZE_t
+            The end index of the sorted samples
+
+        Return
+        ------
+        double* : Pointer to the solved g array, used by BestSplitter(Splitter)
+        """
+
+        pass
+
     cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil:
         """
         Placeholder for a method in RegressionCriterion(Criterion).
@@ -307,10 +332,9 @@ cdef class ClassificationCriterion(Criterion):
     cdef int init(self, const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight, double weighted_n_samples,
                   SIZE_t* samples, SIZE_t start, SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb=None) nogil except -1:
+                  **kwargs) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
         children samples[start:start] and samples[start:end].
-        tb, tb_tb, and tb_bij are for tensor basis criterion and have no effect here.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -329,8 +353,6 @@ cdef class ClassificationCriterion(Criterion):
             The first sample to use in the mask
         end : SIZE_t
             The last sample to use in the mask
-        tb : None
-            Tensor basis Tij. Has no effect in Classification
         """
 
         self.y = y
@@ -723,7 +745,6 @@ cdef class RegressionCriterion(Criterion):
 
     def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples, bint tb_mode=0, bint tb_verbose=0):
         """Initialize parameters for this criterion.
-        For
 
         Parameters
         ----------
@@ -734,7 +755,7 @@ cdef class RegressionCriterion(Criterion):
             The total number of samples to fit on
 
         tb_mode : bint, optional (default=0)
-            On/off flag of tensor basis criterion, based on whether tb is supplied as input in
+            On/off flag of tensor basis criterion, based on whether both tb and bij are supplied as inputs in
             DecisionTreeRegressor.fit()
 
         tb_verbose : bint, optional (default=0)
@@ -755,13 +776,11 @@ cdef class RegressionCriterion(Criterion):
         self.weighted_n_right = 0.0
         # sq_sum_total is the non-deviatoric part of SE
         self.sq_sum_total = 0.0
+        # se_dev is the deviatoric SE and will replace sum_* n_outputs array in tensor basis criterion
+        self.se_dev = 0.
 
         # Tensor basis criterion switch and verbose option
         self.tb_mode, self.tb_verbose = tb_mode, tb_verbose
-        # ls_lwork for dgelss() is calculated as
-        # min(row, col)*3 + max(max(row, col), min(row, col)*2, nrhs)
-        # = 30 + max(max(row, 10), 20)
-        self.ls_lwork = 30 + max(max(n_samples*n_outputs, 10), 20)
 
         # Allocate accumulators. Make sure they are NULL, not uninitialized,
         # before an exception can be raised (which triggers __dealloc__).
@@ -772,11 +791,11 @@ cdef class RegressionCriterion(Criterion):
         # Tensor basis criterion related arrays
         self.tb_node, self.tb_transpose_node = NULL, NULL
         self.bij_node, self.bij_hat_node = NULL, NULL
-        self.g_node, self.se_dev = NULL, NULL
-        # Outputs of least-squares fit of Ax = b dgelss().
+        self.g_node = NULL
+        # Outputs of least-squares fit of Ax = b dgelsd().
         # ls_s is singular value of A in decreasing order.
-        # On exit, if ls_info = 0, ls_work(1) returns the optimal ls_lwork
-        self.ls_s, self.ls_work = NULL, NULL
+        # On exit, if INFO = 0, ls_work(1) returns the optimal ls_lwork
+        self.ls_s, self.ls_work, self.ls_iwork= NULL, NULL, NULL
 
         # Allocate memory for the accumulators.
         # In tensor basis criterion, functionality of sum_* is mostly changed but usage not
@@ -787,26 +806,31 @@ cdef class RegressionCriterion(Criterion):
         # Allocate tensor basis related arrays over all samples in current tree,
         # represented by 1D flattened array of memory addresses.
         # The values are initialized as 0
-        if tb_mode == 1:
+        if tb_mode:
             # self.tb_node = <double*> calloc(n_samples*n_outputs*10, sizeof(double))
             self.tb_transpose_node = <double*> calloc(n_samples*n_outputs*10, sizeof(double))
             self.bij_node = <double*> calloc(n_samples*n_outputs, sizeof(double))
             self.bij_hat_node = <double*> calloc(n_samples*n_outputs, sizeof(double))
             self.g_node = <double*> calloc(10, sizeof(double))
-            # Deviatoric SE will replace the functionality of self.sum_*
-            self.se_dev = <double*> calloc(n_outputs, sizeof(double))
-            # dgelss() least-squares fit of Ax = b related outputs.
-            # Dimension min(A's row, A's col)
+            # dgelsd() least-squares fit of Ax = b related outputs.
+            # Dimension min(A's row, col)
             self.ls_s = <double*> calloc(10, sizeof(double))
-            # Dimension max(1, ls_lwork)
-            self.ls_work = <double*> calloc(self.ls_lwork, sizeof(double))
+            # Dimension max(1, lwork), where lwork is at least
+            # 12col + 2col*SMLSIZ + 8col*NLVL + col*nrhs + (SMLSIZ + 1)**2 if row >= col,
+            # SMLSIZ is the maximum size of subproblems at bottom of computation tree (usually 25, take 26),
+            # NLVL = max(0, int(log_2(min(row, col)/(SMLSIZ + 1))) + 1) = 0 take 1,
+            # => 12*10 + 2*10*26 + 8*10*1 + 10*1 + (26 + 1)**2 = 1459, take 1500
+            self.ls_work = <double*> calloc(1500, sizeof(double))
+            # Dimension max(1, 3*min(A's row, col)*NVLV + 11*min(A's row, col)), see above,
+            # = max(1, 3*10*1 + 11*10) = 140
+            self.ls_iwork = <int*> calloc(140, sizeof(int))
 
         if (self.sum_total == NULL or
                 self.sum_left == NULL or
                 self.sum_right == NULL):
             raise MemoryError()
 
-        if tb_mode == 1:
+        if tb_mode:
             # Raise memory error for large tensor basis related arrays
             if (self.tb_transpose_node == NULL or
                 self.bij_node == NULL or
@@ -816,30 +840,34 @@ cdef class RegressionCriterion(Criterion):
 
     def __dealloc__(self):
         """Destructor. Additional destruction of newly introduced tensor basis arrays. Does nothing if array is NULL?"""
-        if self.tb_mode == 1:
+        if self.tb_mode:
             # Deallocate tensor basis criterion related memory blocks
             # free(self.tb_node)
             free(self.tb_transpose_node)
             free(self.bij_node)
             free(self.bij_hat_node)
             free(self.g_node)
-            free(self.se_dev)
-            # Deallocate S and work array used in dgelss least-squares fit of Ax = b
+            # Deallocate S and work array used in dgelsd() least-squares fit of Ax = b
             free(self.ls_s)
             free(self.ls_work)
+            free(self.ls_iwork)
+            if self.tb_verbose:
+                printf("\n   Array memory blocks are destroyed ")
 
     def __reduce__(self):
-        # For pickling. Addition arg of tb_mode
-        return (type(self), (self.n_outputs, self.n_samples, self.tb_mode), self.__getstate__())
+        # For pickling. Addition args of tb_mode, tb_verbose
+        return (type(self), (self.n_outputs, self.n_samples, self.tb_mode, self.tb_verbose), self.__getstate__())
 
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb=None) nogil except -1:
+                  DOUBLE_t[:, :, ::1] tb=None,
+                  DOUBLE_t[:, ::1] bij=None) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
            children samples[start:start] and samples[start:end].
         For tensor basis criterion only:
-        Tij is n_samples x 9 components x 10 bases or None.
+        tb is n_samples x 9 components x 10 bases or None.
+        bij is n_samples x 9 or None.
         ::1 means C-contiguous
         """
         # Initialize fields
@@ -851,8 +879,8 @@ cdef class RegressionCriterion(Criterion):
         self.n_node_samples = end - start
         self.weighted_n_samples = weighted_n_samples
         self.weighted_n_node_samples = 0.
-        # Extra initialization of tensor basis Tij
-        self.tb = tb
+        # Extra initialization of tensor basis Tij and bij
+        self.tb, self.bij = tb, bij
 
         cdef SIZE_t i
         cdef SIZE_t p
@@ -870,8 +898,8 @@ cdef class RegressionCriterion(Criterion):
                 printf("\n   Evaluating deviatoric SE for samples[start:end] of size %d ", self.n_node_samples)
 
             _ = self._reconstructAnisotropyTensor(start, end)
-            # Then assign self.sum_total to self.se_dev
-            memcpy(self.sum_total, self.se_dev, self.n_outputs*sizeof(double))
+            # Then set self.sum_total n_outputs array to self.se_dev scalar
+            memset(self.sum_total, self.se_dev, self.n_outputs*sizeof(double))
             # printf("\n   Finished TB MSE before split ")
         # If default sum_total behavior, then initialize sum_total to 0 for "+=" later
         else:
@@ -905,32 +933,36 @@ cdef class RegressionCriterion(Criterion):
         self.reset()
         return 0
 
-    cdef int _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil except -1:
-        """Reconstruct the anistropy tensor bij_hat of samples in the index list of samples[pos1:pos2] at a node of interest,
-        and calculate the deviatoric SE component to mostly replace the functionality of 
-        self.sum_total/sum_left/sum_right.
+    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil:
+        """For tensor basis MSE criterion, where Tij and bij are supplemented,
+        calculate the deviatoric summed square error self.se_dev scalar of sorted samples[pos1:pos2]
+        to replace the functionality of self.sum_total/left/right n_outputs array.
+        Given Tij and bij, summed square error is 
+        SE = sum^n_samples||bij - sum^n_bases(Tij*g)||^2
+           = sum^n_samples[sum^n_components(bij^2)]
+             - sum^n_samples[sum^n_components(2bij*bij_hat + bij_hat^2)]
+           = sum^n_samples[sum^n_components(bij^2)] - se_dev.
         
-        First, collect bij (y), and Tij that lies in samples[pos1:pos2] of this node.
-        Next, find one set of 10 g that best fit Tij*g = bij for all samples in this node via LS. 
+        First, collect bij and Tij that lies in sorted samples[pos1:pos2] of this node.
+        Next, find one set of 10 g that best fit Tij*g = bij for all samples in this node via LS fit. 
             1). Compress Tij[n_samples x 9 x 10] to Tij[n_samples*9 x 10]
-            # [DEPRECATED]
-            # 2). Solve min_g J = ||Tij*g - bij||^2 by letting dJ/dg = ||Tij^T*g - Tij^T*bij|| = 0
-            # 3). Find 10 g by LS of the under-determined linear system of 
-            # (Tij^T*Tij)*g = (Tij^T*bij), dimensionally [10 x 10] x [10 x 1] = [10 x 1].
-        Then, compute the reconstructed bij_hat of each sample in this node using bij_hat = Tij*g, 
-        dimensionally [n_samples*9 x 1] = [n_samples*9 x 10]*[10 x 1].
-        Finally, mostly replace the functionality of self.sum_total/sum_left/sum_right
-        from self.sum_*[output] = sum_i^n_samples(yi[output]) to a deviatoric SE,
-        se_dev[output] = sum_i^n_samples(2bij[output]*bij_hat[output] - bij_hat[output]^2),
-        where SE[output] = sum_i^n_samples(yi[output]^2) - se_dev[output]."""
+            2). Find 10 g by LS fit of the over-determined linear system of 
+            Tij[n_samples*9 x 10]*g[10 x 1] = bij[n_samples*9 x 1]
+        Then, compute the reconstructed bij_hat of each sample in this node using 
+        bij_hat[n_samples*9 x 1] = Tij[n_samples*9 x 10]*g[10 x 1].
+        Finally, replace mostly the functionality of self.sum_total/sum_left/sum_right n_outputs array
+        from self.sum_*[n_outputs] = sum^n_samples(y[n_outputs]) to a deviatoric SE scalar,
+        self.se_dev = sum^n_samples[sum^n_components(2bij*bij_hat - bij_hat^2)],
+        where SE = sum^n_samples[sum^n_components(bij^2)] - se_dev,
+        and MSE = SE/n_samples."""
 
         # Index array (samples) and variables definition
         cdef SIZE_t* samples = self.samples
-        cdef SIZE_t n_outputs = self.n_outputs
         cdef SIZE_t i1, i2, p, p0, i
         # abs() not possible for nogil
-        cdef SIZE_t nelem_bij_node = (pos2 - pos1)*n_outputs
-        # Number of rows in Tij_node and bij_node, has to >= 10 for dgelss()
+        cdef SIZE_t n_samples = pos2 - pos1
+        cdef SIZE_t nelem_bij_node = n_samples*9
+        # Number of rows in Tij_node and bij_node, has to >= 10 for dgelsd()
         cdef int row = max(nelem_bij_node, 10)
         # Verbose option for debugging
         cdef bint* verbose = &self.tb_verbose
@@ -939,7 +971,7 @@ cdef class RegressionCriterion(Criterion):
         # minimum [10 x 10] (e.g. Tij) or [10 x 1] (e.g. bij).
         # realloc() tries to perserve old memory as much as possible
         # -- old addresses' values are untouched and will be overwritten.
-        # TODO: not realloc self.ls_work since it doesn't have to be resized?
+        # Not realloc self.ls_work since it doesn't have to be resized
         # &self.tb_node refers to the pointer of self.tb_node
         # safe_realloc(&self.tb_node, row*10)
         safe_realloc(&self.tb_transpose_node, row*10)
@@ -952,7 +984,6 @@ cdef class RegressionCriterion(Criterion):
         # # memset(self.tb_bij_node, 0, 10*sizeof(double))
         # # memset(self.tb_tb_node, 0, 100*sizeof(double))
         memset(self.bij_hat_node, 0, row*sizeof(double))
-        memset(self.se_dev, 0, n_outputs*sizeof(double))
 
         # Tensor basis related flattened array pointers for samples from pos1 to pos2 at this node.
         # Mainly for convenience of dumping "self.".
@@ -966,23 +997,27 @@ cdef class RegressionCriterion(Criterion):
         # cdef DOUBLE_t* tb_tb_node_fortran = self.tb_tb_node_fortran
         cdef DOUBLE_t* g_node = self.g_node
         cdef DOUBLE_t* bij_hat_node = self.bij_hat_node
-        cdef DOUBLE_t* se_dev = self.se_dev
         # cdef DOUBLE_t* tb = &self.tb
         # The following is only used when debugging
-        cdef DOUBLE_t se = 0.0
+        cdef DOUBLE_t se = 0.
         cdef DOUBLE_t mse
 
-        # Least-squares fit dgelss() related variables
+        # Least-squares fit dgelsd() related variables
         cdef int col = 10
         cdef int nrhs = 1
         cdef int lda = row
         cdef int ldb = row
         cdef DOUBLE_t rcond = -1
         cdef int rank, info
-        # Dimension max(1, ls_lwork). ls_lwork is calculated as
-        # min(row, col)*3 + max(max(row, col), min(row, col)*2)
-        cdef int lwork = self.ls_lwork
+        # Dimension of ls_work, at least
+        # 12col + 2col*SMLSIZ + 8col*NLVL + col*nrhs + (SMLSIZ + 1)**2 if row >= col,
+        # SMLSIZ is the maximum size of subproblems at bottom of computation tree (usually 25, take 26),
+        # NLVL = max(0, int(log_2(min(row, col)/(SMLSIZ + 1))) + 1) = 0 take 1,
+        # => 12*10 + 2*10*26 + 8*10*1 + 10*1 + (26 + 1)**2 = 1459, take 1500
+        cdef int lwork = 1500
 
+        # Reset deviatoric SE scalar to 0, replacing functionality of self.sum_* n_outputs array
+        self.se_dev = 0.
         # Flatten Tij, bij and pick up Tij, bij for samples from pos1 to pos2 index at current node,
         # where p is n_samples (3rd axis), i1 is component (row), i2 is basis (column)
         # TODO: prange necessary?
@@ -991,7 +1026,7 @@ cdef class RegressionCriterion(Criterion):
             i = samples[p]
             # Sample index but starts at 0 instead
             p0 = p - pos1
-            for i1 in range(n_outputs):
+            for i1 in range(9):
                 for i2 in range(10):
                     # # n_samples*9 x 10 flattened to 1D memory addresses, C-contiguous.
                     # # tb_node's index is in the order of basis -> component -> n_samples
@@ -999,25 +1034,39 @@ cdef class RegressionCriterion(Criterion):
 
                     # C-contiguous flattened Tij^T, also interpreted as Fortran-contiguous Tij, 10 x n_samples*9.
                     # tb_transpose_node's index is in the order of component -> n_samples -> basis
-                    tb_transpose_node[nelem_bij_node*i2 + p0*n_outputs + i1] = self.tb[i, i1, i2]
+                    # In Tij^T matrix, the order of recording is go through each row of a col then jump to next col
+                    tb_transpose_node[nelem_bij_node*i2 + p0*9 + i1] = self.tb[i, i1, i2]
 
-                # n_samples*9 x 1
-                bij_node[p0*n_outputs + i1] = self.y[i, i1]
+                # bij at this node, n_samples*9 x 1, will contain g solutions after dgelsd()
+                bij_node[p0*9 + i1] = self.bij[i, i1]
 
-        # Least-squares fit with dgelss() to solve g from
+        # Least-squares fit with dgelsd() to solve g from
         # min_g J = ||Tij*g - bij||^2.
-        # The solution of 10 g is contained in bij_node after cython_lapack.dgelss().
-        # Note that dgelss() is written in Fortran thus every matrix needs to be Fortran-contiguous.
+        # The solution of 10 g is contained in bij_node after cython_lapack.dgelsd().
+        # Note that dgelsd() is written in Fortran thus every matrix needs to be Fortran-contiguous.
+        # dgelss() uses Singular Value Decomposition and can solve rank-deficient A matrix.
+        # dgelsd() uses SVD with an algorithm based on divide and conquer and is significantly faster than dgelss().
         # TODO: why is reference used here?
-        # TODO: explain 13 args
-        cython_lapack.dgelss(&row, &col, &nrhs,
+        # row: number of rows of A; col: number of columns of A; nrhs: number of RHS columns
+        # tb_transpose_node: A, destroyed on exit;
+        # lda: lead dimension of A, i.e. row;
+        # bij_node: b, overwritten by col x 1 solution vector X on exit;
+        # ldb: leading dimension of b, max(row, col);
+        # ls_s: singular values of A in decreasing order, min(row, col);
+        # rcond: if < 0, machine precision is used to determine effective rank of A;
+        # ls_work: if INFO = 0 on exit, returns optimal lwork, max(1, lwork);
+        # lwork: dimension of ls_work;
+        # ls_iwork: integer array max(1, LIWORK), ls_iwork(1) returns minimum LIWORK on exit with INFO = 0;
+        # info: 0 means successful exit, if -i, ith arg has illegal value,
+        # if i, i off-diagonal elements of an intermediate bidiagonal form didn't converge to 0.
+        cython_lapack.dgelsd(&row, &col, &nrhs,
                              tb_transpose_node, &lda, bij_node, &ldb,
                              self.ls_s, &rcond, &rank,
-                             self.ls_work, &lwork, &info)
+                             self.ls_work, &lwork, self.ls_iwork, &info)
         if verbose[0]:
-            printf("\n       g solved with exit code %d ", info)
+            printf("\n       g solved with exit code %d and A effective rank %d", info, rank)
 
-        # Since g[10 x 1] is stored in bij_node after dgelss(),
+        # Since g[10 x 1] is stored in bij_node after dgelsd(),
         # go through each basis and get corresponding g_node at this node
         # TODO: not sure if bij_node is shrinked from row x 1 to 10 x 1
         for i2 in range(10):
@@ -1071,33 +1120,31 @@ cdef class RegressionCriterion(Criterion):
         for p in range(pos1, pos2):
             i = samples[p]
             p0 = p - pos1
-            for i1 in range(n_outputs):
+            for i1 in range(9):
                 # For each component, perform bij_hat = sum_1^10(Tij*g)
                 for i2 in range(10):
                     # Flattened bij_hat construction complete at this node, n_samples*9 x 1
-                    bij_hat_node[p0*n_outputs + i1] += self.tb[i, i1, i2]*g_node[i2]
+                    bij_hat_node[p0*9 + i1] += self.tb[i, i1, i2]*g_node[i2]
 
                 # Replacing (almost) the functionality of self.sum_total/sum_left/sum_right with deviatoric SE
-                # Originally, self.sum_total/sum_left/sum_right is sum_i^n(yi).
-                # Now, se_dev is the deviatoric SE and is sum_i^n(2bij*bij_hat - bij_hat^2),
-                # and SE_ij = sum_i^n(bij^2) - se_dev[i1]; MSE_ij = sum_i^n(bij^2)/n - se_dev[i1]/n.
-                # (M)MSE = sum_1^n_outputs(MSE_ij)/n_outputs
-                se_dev[i1] += 2.0*self.y[i, i1]*bij_hat_node[p0*n_outputs + i1] \
-                - bij_hat_node[p0*n_outputs + i1]**2.0
+                # Originally, self.sum_total/sum_left/sum_right is sum^n_samples(y).
+                # Now, se_dev is the deviatoric SE and is sum^n_samples[sum^n_components(2bij*bij_hat - bij_hat^2)],
+                # and SE = sum^n_samples[sum^n_components(bij^2)] - se_dev;
+                # MSE = sum^n_samples[sum^n_components(bij^2)]/n_samples - se_dev/n_samples.
+                self.se_dev += 2.0*self.bij[i, i1]*bij_hat_node[p0*9 + i1] \
+                - bij_hat_node[p0*9 + i1]**2.0
                 # Calculate SE if debugging is on.
-                # First sum_i^n_samples[sum_i1^n_outputs(y_{i, i1}^2)], the non-deviatoric SE
+                # Currently aggregating the non-deviatoric part of SE and later remove deviatoric part from it
                 if verbose[0]:
-                    se += self.y[i, i1]*self.y[i, i1]
+                    se += self.bij[i, i1]*self.bij[i, i1]
 
         # If debugging, remove deviatoric SE from non-deviatoric SE to derive accumulative SE of all components
         if verbose[0]:
-            for i1 in range(n_outputs):
-                se -= se_dev[i1]
-
-            mse = se/nelem_bij_node
+            se -= self.se_dev
+            mse = se/n_samples
             printf("\n       MSE = %8.8f ", mse)
 
-        return 0
+        return g_node
 
     cdef int reset(self) nogil except -1:
         """Reset the criterion at pos=start."""
@@ -1189,12 +1236,11 @@ cdef class RegressionCriterion(Criterion):
 
             # In default, sum_left is accumulative,
             # i.e. sum_left(start:new_pos) is sum_left(start:pos) + sum_left(pos:new_pos),
-            # instead of calculating expensive sum_left(start:new_pos) every time new_pos is supplied.
+            # instead of calculating expensively sum_left(start:new_pos) every time new_pos is supplied.
             # However, in tensor basis criterion, sum_left has to be calculated in [start:new_pos] every time
             _ = self._reconstructAnisotropyTensor(self.start, new_pos)
-            # Then assign sum_left to self.se_dev, component by component
-            # TODO: what if memcpy(sum_left) instead of memcpy(self.sum_left)?
-            memcpy(self.sum_left, self.se_dev, self.n_outputs*sizeof(double))
+            # Then set sum_left n_outputs array to self.se_dev scalar
+            memset(sum_left, self.se_dev, self.n_outputs*sizeof(double))
             # Also get number of samples in left child node, with weight disabled
             self.weighted_n_left = new_pos - self.start
             # Do the same for the right child node samples
@@ -1202,8 +1248,7 @@ cdef class RegressionCriterion(Criterion):
                 printf("\n      Evaluating deviatoric SE for samples[split:end] of size %d ", (end - new_pos))
 
             _ = self._reconstructAnisotropyTensor(new_pos, end)
-            # TODO: what if memcpy(sum_right) instead of memcpy(self.sum_right)?
-            memcpy(self.sum_right, self.se_dev, self.n_outputs*sizeof(double))
+            memset(sum_right, self.se_dev, self.n_outputs*sizeof(double))
 
         self.weighted_n_right = (self.weighted_n_node_samples -
                                  self.weighted_n_left)
@@ -1220,8 +1265,10 @@ cdef class RegressionCriterion(Criterion):
     cdef void node_value(self, double* dest) nogil:
         """Compute the node value of samples[start:end] into dest.
         Definition of dest is changed for tensor basis criterion. By default, dest[k] is mean y[k] at this node.
-        However, in tensor basis criterion, dest[k] is deviatoric MSE[k] = MSE[k] - sum_i^n_samples(yi[k]^2)/n_samples, 
-        like original, higher is better."""
+        However, in tensor basis criterion, dest[any index] is
+        deviatoric MSE scalar 
+        = sum^n_samples[sum^n_components(2bij*bij_hat - bij_hat^2)]/n_samples.
+        Like original, higher is better."""
 
         cdef SIZE_t k
 
@@ -1242,13 +1289,13 @@ cdef class RegressionCriterion(Criterion):
         """
         cdef double current_proxy_improvement
         # Cast int type on the double sample split index
-        cdef SIZE_t split_pos_tmp = <int>split_pos
+        cdef SIZE_t split_pos_tmp = <int> split_pos
         # TODO: not skipping constant feature values atm.
         #  Could provide void *args to support this feature
 
         # sum_left/right, pos and weighted_n_left/right
         # are updated using current split index double
-        _ = self.update(split_pos_tmp)
+        self.update(split_pos_tmp)
         # For tensor basis criterion, only sum_left/right from Criterion.update() are useful here,
         # to get pseudo impurity improvement at current split
         current_proxy_improvement = self.proxy_impurity_improvement()
@@ -1273,17 +1320,17 @@ cdef class MSE(RegressionCriterion):
         cdef SIZE_t k
 
         impurity = self.sq_sum_total / self.weighted_n_node_samples
-        for k in range(self.n_outputs):
-            # If tensor basis criterion, then self.sum_*[k] is
-            # sum_1^n_samples(2bij[k]*bij_hat[k] - bij_hat[k]^2),
-            # and MSE = [sq_sum_total - sum_k(sum_total[k])]/9n_samples
-            if self.tb_mode:
-                impurity -= sum_total[k]/self.weighted_n_node_samples
-            # Otherwise, MSE = sq_sum_total - sum_k^n_outputs(y_bar[k]^2)
-            else:
+        # If tensor basis criterion, then self.sum_*[any index] is
+        # sum^n_samples[sum^n_components(2bij*bij_hat - bij_hat^2)],
+        # and MSE = (sq_sum_total - sum_total)/n_samples
+        if self.tb_mode:
+            impurity -= sum_total[0]/self.weighted_n_node_samples
+        # Otherwise, MSE = sq_sum_total - sum_k^n_outputs(y_bar[k]^2)
+        else:
+            for k in range(self.n_outputs):
                 impurity -= (sum_total[k] / self.weighted_n_node_samples)**2.0
 
-        return impurity / self.n_outputs
+        return impurity / self.n_outputs if not self.tb_mode else impurity
 
     cdef double proxy_impurity_improvement(self) nogil:
         """Compute a proxy of the impurity reduction
@@ -1308,19 +1355,20 @@ cdef class MSE(RegressionCriterion):
         cdef double proxy_impurity_left = 0.0
         cdef double proxy_impurity_right = 0.0
 
-        for k in range(self.n_outputs):
-            # By default, proxy_impurity_left[k] is
-            # weighted_n_left*y_bar[k]^2 = sum_left[k]^2/weighted_n_left,
-            # and proxy_impurity_left = sum_1^n_outputs(proxy_impurity_left[k]), higher is better.
-            #
-            # However, in tensor basis criterion, proxy_impurity_left[k] is deviatoric SE_left[k] = sum_left[k].
-            # Therefore, proxy_impurity_left[k] = sum_left[k], higher is better
-            if not self.tb_mode:
+        # By default, proxy_impurity_left[k] is
+        # weighted_n_left*y_bar[k]^2 = sum_left[k]^2/weighted_n_left,
+        # and proxy_impurity_left = sum_1^n_outputs(proxy_impurity_left[k]), higher is better.
+        #
+        # However, in tensor basis criterion, proxy_impurity_left is deviatoric SE_left directly.
+        # Therefore, proxy_impurity_left = sum_left[any index], higher is better
+        if not self.tb_mode:
+            for k in range(self.n_outputs):
                 proxy_impurity_left += sum_left[k] * sum_left[k]
                 proxy_impurity_right += sum_right[k] * sum_right[k]
-            else:
-                proxy_impurity_left += sum_left[k]
-                proxy_impurity_right += sum_right[k]
+
+        else:
+            proxy_impurity_left = sum_left[0]
+            proxy_impurity_right = sum_right[0]
 
         if not self.tb_mode:
 
@@ -1373,18 +1421,19 @@ cdef class MSE(RegressionCriterion):
         impurity_left[0] = sq_sum_left / self.weighted_n_left
         impurity_right[0] = sq_sum_right / self.weighted_n_right
 
-        for k in range(self.n_outputs):
-            # Just like in MSE.node_impurity(), since definition of sum_* is slightly changed,
-            # impurity_* calculation is too, for tensor basis criterion
-            if not self.tb_mode:
+        # Just like in MSE.node_impurity(), since definition of sum_* is slightly changed,
+        # impurity_* calculation is too, for tensor basis criterion
+        if not self.tb_mode:
+            for k in range(self.n_outputs):
                 impurity_left[0] -= (sum_left[k] / self.weighted_n_left) ** 2.0
                 impurity_right[0] -= (sum_right[k] / self.weighted_n_right) ** 2.0
-            else:
-                impurity_left[0] -= sum_left[k]/self.weighted_n_left
-                impurity_right[0] -= sum_right[k]/self.weighted_n_right
 
-        impurity_left[0] /= self.n_outputs
-        impurity_right[0] /= self.n_outputs
+            impurity_left[0] /= self.n_outputs
+            impurity_right[0] /= self.n_outputs
+
+        else:
+            impurity_left[0] -= sum_left[0]/self.weighted_n_left
+            impurity_right[0] -= sum_right[0]/self.weighted_n_right
 
 cdef class MAE(RegressionCriterion):
     r"""Mean absolute error impurity criterion
@@ -1399,7 +1448,7 @@ cdef class MAE(RegressionCriterion):
     cdef np.ndarray right_child
     cdef DOUBLE_t* node_medians
 
-    def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples, bint tb_mode=0):
+    def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples, bint tb_mode=0, bint tb_verbose=0):
         """Initialize parameters for this criterion.
 
         Parameters
@@ -1410,9 +1459,12 @@ cdef class MAE(RegressionCriterion):
         n_samples : SIZE_t
             The total number of samples to fit on
 
-        tb_mode : bint
+        tb_mode : bint, optional (default=0)
             On/off flag of tensor basis criterion, based on whether tb is supplied as input in
             DecisionTreeRegressor.fit()
+
+        tb_verbose : bint, optional (default=0)
+            Whether to verbose tensor basis criterion related information for verbose
         """
 
         # Default values
@@ -1431,7 +1483,7 @@ cdef class MAE(RegressionCriterion):
         self.weighted_n_right = 0.0
 
         # Tensor basis criterion switch
-        self.tb_mode = tb_mode
+        self.tb_mode, self.tb_verbose = tb_mode, tb_verbose
         # TODO: tensor basis calculations for MAE
         # Off at the moment
         if tb_mode:
@@ -1454,7 +1506,8 @@ cdef class MAE(RegressionCriterion):
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb=None) nogil except -1:
+                  DOUBLE_t[:, :, ::1] tb=None,
+                  DOUBLE_t[:, ::1] bij=None) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
            children samples[start:start] and samples[start:end]."""
 
@@ -1470,8 +1523,8 @@ cdef class MAE(RegressionCriterion):
         self.n_node_samples = end - start
         self.weighted_n_samples = weighted_n_samples
         self.weighted_n_node_samples = 0.
-        # Extra initialization of tensor basis Tij
-        self.tb = tb
+        # Extra initialization of tensor basis Tij, anisotropy tensor bij
+        self.tb, self.bij = tb, bij
 
         # Wtf double **... o.O
         cdef void** left_child
