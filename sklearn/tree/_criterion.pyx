@@ -332,7 +332,9 @@ cdef class ClassificationCriterion(Criterion):
     cdef int init(self, const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight, double weighted_n_samples,
                   SIZE_t* samples, SIZE_t start, SIZE_t end,
-                  **kwargs) nogil except -1:
+                  # Extra kwargs, not used
+                  DOUBLE_t[:, :, ::1] tb=None,
+                  DOUBLE_t[:, ::1] bij=None) nogil except -1:
         """Initialize the criterion at node samples[start:end] and
         children samples[start:start] and samples[start:end].
 
@@ -380,7 +382,6 @@ cdef class ClassificationCriterion(Criterion):
 
         for p in range(start, end):
             i = samples[p]
-
             # w is originally set to be 1.0, meaning that if no sample weights
             # are given, the default weight of each sample is 1.0
             if sample_weight != NULL:
