@@ -96,7 +96,7 @@ cdef class TreeBuilder:
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
                 # Extra kwarg
-                np.ndarray[DOUBLE, ndim=3] tb=None):
+                np.ndarray tb=None):
         """Build a decision tree from the training set (X, y).
         If using tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
         and y is anisotropy tensor of shape (n_samples, n_outputs)."""
@@ -105,7 +105,7 @@ cdef class TreeBuilder:
     cdef inline _check_input(self, object X, np.ndarray y,
                              np.ndarray sample_weight,
                              # Extra kwarg
-                             np.ndarray[DOUBLE, ndim=3] tb=None):
+                             np.ndarray tb=None):
         """Check input dtype, layout and format.
         Additional check of tensor basis tb if it's not None."""
         if issparse(X):
@@ -168,7 +168,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
                 # Extra kwarg
-                np.ndarray[DOUBLE, ndim=3] tb=None):
+                np.ndarray tb=None):
         """Build a decision tree from the training set (X, y).
         If using tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
         and y is anisotropy tensor of shape (n_samples, n_outputs)."""
@@ -378,7 +378,7 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
                 # Extra kwarg
-                np.ndarray[DOUBLE, ndim=3] tb=None):
+                np.ndarray tb=None):
         """Build a decision tree from the training set (X, y).
         If using tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
         and y is anisotropy tensor of shape (n_samples, n_outputs)."""
@@ -847,7 +847,7 @@ cdef class Tree:
         return node_id
 
     # Extra kwarg of tb
-    cpdef np.ndarray predict(self, object X, np.ndarray[DOUBLE, ndim=3] tb=None):
+    cpdef np.ndarray predict(self, object X, np.ndarray tb=None):
         """Predict target for X.
         In tensor basis criterion, the predictions out is holding predicted 10 optimal g.
         Therefore, if tensor basis tb of shape (n_samples, n_outputs, n_bases) is supplied, 
@@ -863,7 +863,7 @@ cdef class Tree:
         # Since out in tensor basis criterion is optimal g of shape (n_samples, n_bases),
         # if tb is not None, calculate bij from
         # bij = sum^n_bases(Tij*g)
-        cdef np.ndarray[DOUBLE, ndim=2] bij
+        cdef np.ndarray[DOUBLE_t, ndim=2] bij
         if tb is not None:
             print("\nTensor basis is provided, the predictions are bij. ")
             # Note bij has 6 outputs due to tensor symmetry

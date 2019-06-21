@@ -67,7 +67,6 @@ cdef double log(double x) nogil
 # =============================================================================
 
 # A record on the stack for depth-first tree growing
-# TODO: consider storing g here instead of y, something like g_l g_r
 cdef struct StackRecord:
     SIZE_t start
     SIZE_t end

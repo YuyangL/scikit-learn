@@ -27,6 +27,8 @@ from libc.stdio cimport printf
 import numpy as np
 cimport numpy as np
 np.import_array()
+# For early stop in proxy_impurity_improvement_pipeline()
+cdef double INFINITY = np.inf
 
 from ._utils cimport log
 from ._utils cimport safe_realloc
@@ -996,7 +998,7 @@ cdef class RegressionCriterion(Criterion):
 
         # Index array (samples) and variables definition
         cdef SIZE_t* samples = self.samples
-        cdef SIZE_t* n_outputs = self.n_outputs
+        cdef SIZE_t n_outputs = self.n_outputs
         cdef SIZE_t i1, i2, p, p0, i
         # abs() not possible for nogil
         cdef SIZE_t n_samples = pos2 - pos1
@@ -1293,7 +1295,6 @@ cdef class RegressionCriterion(Criterion):
         Since higher is better in the output, an inverse is taken during Brent optimization to minimize, 
         if using Brent optimization.
         """
-        cdef double INFINITY = np.inf
         cdef double current_proxy_improvement
         cdef SIZE_t i
         cdef double g_l_penalty = 0.

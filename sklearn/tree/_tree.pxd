@@ -67,7 +67,7 @@ cdef class Tree:
 
     # In tensor basis mode, if tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
     # then the prediction is bij = sum^n_bases(Tij*g)
-    cpdef np.ndarray predict(self, object X, np.ndarray[np.float64, ndim=3] tb=*)
+    cpdef np.ndarray predict(self, object X, np.ndarray tb=*)
 
     cpdef np.ndarray apply(self, object X)
     cdef np.ndarray _apply_dense(self, object X)
@@ -105,6 +105,6 @@ cdef class TreeBuilder:
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=*,
                 np.ndarray X_idx_sorted=*,
-                np.ndarray[DOUBLE_t, ndim=3] tb=*)
+                np.ndarray tb=*)
     # Additional kwargs of tb
-    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight, np.ndarray[DOUBLE_t, ndim=3] tb=*)
+    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight, np.ndarray tb=*)
