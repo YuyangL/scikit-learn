@@ -21,8 +21,6 @@ from ._tree cimport INT32_t          # Signed 32 bit integer
 from ._tree cimport UINT32_t         # Unsigned 32 bit integer
 
 cdef struct SplitRecord:
-    # TODO: consider storing g here instead of y
-    #  something like g_l and g_r
     # Data to track sample split
     SIZE_t feature         # Which feature to split on.
     SIZE_t pos             # Split samples array at the given position,
@@ -83,13 +81,12 @@ cdef class Splitter:
     # "Encoded" to integer
 
     cdef bint split_verbose              # Verbose in node_split()
+    cdef double alpha_g_split            # L2 regularization to penalize large g during split finder
 
-    # Removing const status of y since it's changing in tensor basis criterion
-    cdef DOUBLE_t[:, ::1] y
+    cdef const DOUBLE_t[:, ::1] y
     cdef DOUBLE_t* sample_weight
     # Tensor basis criterion related declarations
     cdef DOUBLE_t[:, :, ::1] tb
-    cdef DOUBLE_t[:, ::1] bij
 
     # The samples vector `samples` is maintained by the Splitter object such
     # that the samples contained in a node are contiguous. With this setting,
@@ -108,12 +105,11 @@ cdef class Splitter:
     # This allows optimization with depth-based tree building.
 
     # Methods
-    # Removing const status of y since it's changing in tensor basis criterion
-    cdef int init(self, object X, DOUBLE_t[:, ::1] y,
+    # Additional kwarg
+    cdef int init(self, object X, const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
                   np.ndarray X_idx_sorted=*,
-                  DOUBLE_t[:, :, ::1] tb=*,
-                  DOUBLE_t[:, ::1] bij=*) except -1
+                  DOUBLE_t[:, :, ::1] tb=*) except -1
 
     cdef int node_reset(self, SIZE_t start, SIZE_t end,
                         double* weighted_n_node_samples) nogil except -1
@@ -131,5 +127,5 @@ cdef class Splitter:
 
     cdef double node_impurity(self) nogil
 
-    # Additional method to retrieve Criterion.g_node pointer after finding best split
-    cdef double* bestTensorBasisCoefficients(self, SIZE_t pos1, SIZE_t pos2) nogil
+    # # Additional method to retrieve Criterion.g_node pointer after finding best split
+    # cdef double* bestTensorBasisCoefficients(self, SIZE_t pos1, SIZE_t pos2) nogil

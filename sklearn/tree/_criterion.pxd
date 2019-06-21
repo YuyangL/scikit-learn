@@ -24,11 +24,9 @@ cdef class Criterion:
     # such as the mean in regression and class probabilities in classification.
 
     # Internal structures
-    # Since in tensor basis criterion, y is g which is changing, y is not constant
     cdef const DOUBLE_t[:, ::1] y        # Values of y
     # Tensor basis inputs declaration
     cdef DOUBLE_t[:, :, ::1] tb
-    cdef DOUBLE_t[:, ::1] bij
     cdef DOUBLE_t* sample_weight         # Sample weights
 
     cdef SIZE_t* samples                 # Sample indices in X, y
@@ -61,8 +59,7 @@ cdef class Criterion:
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end,
-                  DOUBLE_t[:, :, ::1] tb=*,
-                  DOUBLE_t[:, ::1] bij=*) nogil except -1
+                  DOUBLE_t[:, :, ::1] tb=*) nogil except -1
     cdef int reset(self) nogil except -1
     cdef int reverse_reset(self) nogil except -1
     cdef int update(self, SIZE_t new_pos) nogil except -1
@@ -73,10 +70,13 @@ cdef class Criterion:
     cdef double impurity_improvement(self, double impurity) nogil
     cdef double proxy_impurity_improvement(self) nogil
     # Additional method to put self.update() and self.proxy_impurity_improvement
-    # in a pipeline, for Brent optimization of finding best split
-    cdef double proxy_impurity_improvement_pipeline(self, double split_pos) nogil
+    # in a pipeline,
+    # with checks of minimum samples in leaf and minimum sample weights in leaf
+    cdef double proxy_impurity_improvement_pipeline(self, double split_pos, SIZE_t min_samples_leaf,
+                                                    double min_wight_leaf,
+                                                    double alpha_g_split=*) nogil
     # Additional method to reconstruct anisotropy tensors
-    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2) nogil
+    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, double alpha=*) nogil
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""
@@ -91,6 +91,8 @@ cdef class RegressionCriterion(Criterion):
     # Tensor basis related declaration that are used in reconstructAnisotropyTensor()
     # Deviatoric SE scalar, used to replace functionality of sum_total/left/right
     cdef double se_dev
+    # L2 regularization fraction for LS fit of g to penalize large optimal g
+    cdef double alpha_g_fit
     # Tensor basis criterion switch.
     # If tb is provided in DecisionTreeRegressor.fit(), then tb_mode is 1/True
     cdef bint tb_mode
@@ -101,7 +103,15 @@ cdef class RegressionCriterion(Criterion):
     cdef double* tb_transpose_node
     cdef double* bij_node
     cdef double* bij_hat_node
+    # Temporary 10 g at node / left/right child, changing every time depending on split location
+    cdef double* g_node_tmp
+    # Found 10 g to be stored as future prediction for this node.
+    # Although only leaf nodes' g matters, other nodes' g are stored too for inspection/interpretation
     cdef double* g_node
+    # Also declare left and right children optimal g of current node
+    cdef double* g_node_l
+    cdef double* g_node_r
+
     # dgelsd() related declaration
     cdef double* ls_s
     cdef double* ls_work

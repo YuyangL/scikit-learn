@@ -146,6 +146,7 @@ cdef class Stack:
         Returns 0 if pop was successful (and ``res`` is set); -1
         otherwise.
         """
+        # After first push, Stack.top is 1
         cdef SIZE_t top = self.top
         cdef StackRecord* stack = self.stack_
 

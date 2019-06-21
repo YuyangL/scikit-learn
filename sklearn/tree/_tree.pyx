@@ -95,22 +95,19 @@ cdef class TreeBuilder:
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
-                # Extra kwargs
-                np.ndarray tb=None,
-                np.ndarray bij=None):
+                # Extra kwarg
+                np.ndarray[DOUBLE, ndim=3] tb=None):
         """Build a decision tree from the training set (X, y).
-        If using tensor basis criterion, then tensor basis tb and anisotropy tensor bij need to be supplied,
-        and y is only used to store best 10 tensor basis coefficients g."""
+        If using tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
+        and y is anisotropy tensor of shape (n_samples, n_outputs)."""
         pass
 
     cdef inline _check_input(self, object X, np.ndarray y,
                              np.ndarray sample_weight,
-                             # Extra kwargs
-                             np.ndarray tb=None,
-                             np.ndarray bij=None):
+                             # Extra kwarg
+                             np.ndarray[DOUBLE, ndim=3] tb=None):
         """Check input dtype, layout and format.
-        Additional check of tensor basis tb and anisotropy tensor bij, 
-        if they're not all None."""
+        Additional check of tensor basis tb if it's not None."""
         if issparse(X):
             X = X.tocsc()
             X.sort_indices()
@@ -126,24 +123,20 @@ cdef class TreeBuilder:
             # since we have to copy we will make it fortran for efficiency
             X = np.asfortranarray(X, dtype=DTYPE)
 
-        # If tb and bij are both provided,
-        # make sure y is shape (n_samples, 10) to store g later
-        # and make sure they have np.float64 (DOUBLE) dtype and are C-contiguous
-        if tb is not None and bij is not None:
+        # If tb is provided,
+        # make sure it has np.float64 (DOUBLE) dtype and are C-contiguous
+        if tb is not None:
             if tb.dtype != DOUBLE or not tb.flags.contiguous:
                tb = np.ascontiguousarray(tb, dtype=DOUBLE)
 
-            if bij.dtype != DOUBLE or not bij.flags.contiguous:
-                bij = np.ascontiguousarray(bij, dtype=DOUBLE)
+            # if np.shape(y) != (X.shape[0], 10): y = np.zeros((X.shape[0], 10))
+            # if y.dtype != DOUBLE or not y.flags.contiguous:
+            #     y = np.ascontiguousarray(y, dtype=DOUBLE)
 
-            if np.shape(y) != (X.shape[0], 10): y = np.zeros((X.shape[0], 10))
-            if y.dtype != DOUBLE or not y.flags.contiguous:
-                y = np.ascontiguousarray(y, dtype=DOUBLE)
-
-        # Otherwise, only check y
-        else:
-            if y.dtype != DOUBLE or not y.flags.contiguous:
-                y = np.ascontiguousarray(y, dtype=DOUBLE)
+        # # Otherwise, only check y
+        # else:
+        if y.dtype != DOUBLE or not y.flags.contiguous:
+            y = np.ascontiguousarray(y, dtype=DOUBLE)
 
         if (sample_weight is not None and
             (sample_weight.dtype != DOUBLE or
@@ -152,7 +145,7 @@ cdef class TreeBuilder:
                                            order="C")
 
         # Additional return of checked tb
-        return X, y, sample_weight, tb, bij
+        return X, y, sample_weight, tb
 
 # Depth first builder ---------------------------------------------------------
 
@@ -174,16 +167,14 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
-                # Extra kwargs
-                np.ndarray tb=None,
-                np.ndarray bij=None):
+                # Extra kwarg
+                np.ndarray[DOUBLE, ndim=3] tb=None):
         """Build a decision tree from the training set (X, y).
-        If using tensor basis criterion, 
-        then tensor basis tb and anisotropy tensor bij need to be supplied,
-        and y is only to store best 10 tensor basis coefficients g."""
+        If using tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
+        and y is anisotropy tensor of shape (n_samples, n_outputs)."""
 
-        # check input, incl. tb, bij
-        X, y, sample_weight, tb, bij = self._check_input(X, y, sample_weight, tb, bij)
+        # check input, incl. tb
+        X, y, sample_weight, tb = self._check_input(X, y, sample_weight, tb)
 
         cdef DOUBLE_t* sample_weight_ptr = NULL
         if sample_weight is not None:
@@ -210,13 +201,14 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
 
         # Recursive partition (without actual recursion)
         # Supply tb regardless whether it'll be used
-        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb, bij)
+        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb)
 
         cdef SIZE_t start
         cdef SIZE_t end
         cdef SIZE_t depth
         cdef SIZE_t parent
         cdef bint is_left
+        # Initialized as total number of samples
         cdef SIZE_t n_node_samples = splitter.n_samples
         cdef double weighted_n_samples = splitter.weighted_n_samples
         cdef double weighted_n_node_samples
@@ -228,13 +220,20 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
         cdef bint is_leaf
         cdef bint first = 1
         cdef SIZE_t max_depth_seen = -1
+        # -1 means error
         cdef int rc = 0
 
+        # Stack is a class and contains StackRecord struct
+        # INITIAL_STACK_SIZE is 10
+        # Stack.capacity = 10; Stack.top = 0; Stack.stack_ struct initialized to NULL
         cdef Stack stack = Stack(INITIAL_STACK_SIZE)
         cdef StackRecord stack_record
 
         with nogil:
-            # push root node onto stack
+            # push root node onto stack.
+            # start, end, depth, parent, is_left, impurity, n_constant_features
+            # n_node_samples is total number of samples initially.
+            # _TREE_UNDEFINED is -2.
             # impurity is pushed as INFINITY
             rc = stack.push(0, n_node_samples, 0, _TREE_UNDEFINED, 0, INFINITY, 0)
             if rc == -1:
@@ -245,7 +244,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
             # The loop to split the tree
             while not stack.is_empty():
                 # Pop whatever record is on top, the order should be all left first then all right,
-                # as record was pushed as right then left each depth
+                # as record was pushed as right then left each depth.
+                # Stack.stack_ struct is called/popped in Stack.pop()
                 stack.pop(&stack_record)
 
                 start = stack_record.start
@@ -253,6 +253,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 depth = stack_record.depth
                 # # Verbose tree depth
                 # printf("\n  Depth: %d ", depth)
+                # parent has been initialized as -2, is_left 0
                 parent = stack_record.parent
                 is_left = stack_record.is_left
                 # Initialized as INFINITY, then impurity becomes each child node's impurity
@@ -272,7 +273,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                            weighted_n_node_samples < 2 * min_weight_leaf)
 
                 if first:
-                    # Impurity at root node, a.k.a. MSE
+                    # Impurity at root node, a.k.a. root variance.
+                    # Calling Criterion.node_impurity()
                     impurity = splitter.node_impurity()
                     first = 0
 
@@ -280,7 +282,9 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                            (impurity <= min_impurity_split))
 
                 if not is_leaf:
-                    # Find best split on node samples[start:end]
+                    # Find best split on node samples[start:end].
+                    # Recall split is SplitRecord struct that contains
+                    # feature, pos, threshold, improvement, impurity_left/right
                     splitter.node_split(impurity, &split, &n_constant_features)
                     # If EPSILON=0 in the below comparison, float precision
                     # issues stop splitting, producing trees that are
@@ -289,6 +293,7 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                                (split.improvement + EPSILON <
                                 min_impurity_decrease))
 
+                # The root node is added first
                 node_id = tree._add_node(parent, is_left, is_leaf, split.feature,
                                          split.threshold, impurity, n_node_samples,
                                          weighted_n_node_samples)
@@ -299,9 +304,12 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
 
                 # Store value for all nodes, to facilitate tree/model
                 # inspection and interpretation.
-                # If using tensor basis criterion, definition of node value is changed from mean y at this node to
-                # deviatoric MSE scalar
-                # = sum^n_samples[sum^n_components(2bij*bij_hat - bij_hat^2)]/n_samples
+                # Node value is stored as constant prediction of y when new samples are predicted and end up in such node.
+                # By default, node value is simply mean y of such node and has shape (n_outputs,).
+                # In tensor basis criterion, node value is 10 best g found for that node, shape (10,) regardless of y.
+                # Therefore, in tensor basis criterion, Tree.value_stride is 10.
+                # Tree.value points to first value of the node value array address.
+                # Then after + node_id*Tree.value_stride, pointer is jumped to first value of the node_id value array address
                 splitter.node_value(tree.value + node_id * tree.value_stride)
 
                 if not is_leaf:
@@ -369,15 +377,14 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=None,
                 np.ndarray X_idx_sorted=None,
-                # Extra kwargs
-                np.ndarray tb=None,
-                np.ndarray bij=None):
+                # Extra kwarg
+                np.ndarray[DOUBLE, ndim=3] tb=None):
         """Build a decision tree from the training set (X, y).
-        If using tensor basis criterion, tensor basis tb and anisotropy tensor bij need to be supplied,
-        and y is only used to store best 10 tensor basis coefficients g."""
+        If using tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
+        and y is anisotropy tensor of shape (n_samples, n_outputs)."""
 
-        # check input, incl. tb, bij
-        X, y, sample_weight, tb, bij = self._check_input(X, y, sample_weight, tb, bij)
+        # check input, incl. tb
+        X, y, sample_weight, tb = self._check_input(X, y, sample_weight, tb)
 
         cdef DOUBLE_t* sample_weight_ptr = NULL
         if sample_weight is not None:
@@ -391,8 +398,8 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         cdef SIZE_t min_samples_split = self.min_samples_split
 
         # Recursive partition (without actual recursion)
-        # Supply tb, bij regardless whether they'll be used
-        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb, bij)
+        # Supply tb regardless whether it'll be used
+        splitter.init(X, y, sample_weight_ptr, X_idx_sorted, tb)
 
         cdef PriorityHeap frontier = PriorityHeap(INITIAL_STACK_SIZE)
         cdef PriorityHeapRecord record
@@ -533,9 +540,12 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
             return -1
 
         # compute values also for split nodes (might become leafs later).
-        # The definition of the node value is changed if using tensor basis criterion from calculating mean y to
-        # deviatoric MSE scalar
-        # = sum^n_samples[sum^n_components(2bij*bij_hat - bij_hat^2)]/n_samples.
+        # Node value is stored as constant prediction of y when new samples are predicted and end up in such node.
+        # By default, node value is simply mean y of such node and has shape (n_outputs,).
+        # In tensor basis criterion, node value is 10 best g found for that node, shape (10,) regardless of y.
+        # Therefore, in tensor basis criterion, Tree.value_stride is 10.
+        # Tree.value points to first value of the node value array address.
+        # Then after + node_id*Tree.value_stride, pointer is jumped to first value of the node_id value array address
         splitter.node_value(tree.value + node_id * tree.value_stride)
 
         res.node_id = node_id
@@ -763,6 +773,7 @@ cdef class Tree:
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
         """
+        # Tree.capacity is 0 initially
         if capacity == self.capacity and self.nodes != NULL:
             return 0
 
@@ -773,9 +784,12 @@ cdef class Tree:
                 capacity = 2 * self.capacity
 
         safe_realloc(&self.nodes, capacity)
+        # Tree.value is NULL initially
+        # Tree.value_stride is basically n_outputs initially
         safe_realloc(&self.value, capacity * self.value_stride)
 
         # value memory is initialised to 0 to enable classifier argmax
+        # This is done initially when capacity > 0 and Tree.capacity = 0
         if capacity > self.capacity:
             memset(<void*>(self.value + self.capacity * self.value_stride), 0,
                    (capacity - self.capacity) * self.value_stride *
@@ -804,6 +818,8 @@ cdef class Tree:
             if self._resize_c() != 0:
                 return <SIZE_t>(-1)
 
+        # Recall Node struct contains
+        # left/right_child, feature, threshold, impurity, n_node_samples, weighted_n_node_samples
         cdef Node* node = &self.nodes[node_id]
         node.impurity = impurity
         node.n_node_samples = n_node_samples
@@ -830,23 +846,54 @@ cdef class Tree:
 
         return node_id
 
-    cpdef np.ndarray predict(self, object X):
-        """Predict target for X."""
+    # Extra kwarg of tb
+    cpdef np.ndarray predict(self, object X, np.ndarray[DOUBLE, ndim=3] tb=None):
+        """Predict target for X.
+        In tensor basis criterion, the predictions out is holding predicted 10 optimal g.
+        Therefore, if tensor basis tb of shape (n_samples, n_outputs, n_bases) is supplied, 
+        then bij of shape (n_samples, n_outputs, 1) will be calculated and returned as prediction,
+        due to tensor symmetry."""
+        # 1. self.apply(); 2. self._get_value_ndarray(); 3. ndarray.take()
+        # ndarray.take() takes elements from an array along an axis
         out = self._get_value_ndarray().take(self.apply(X), axis=0,
                                              mode='clip')
         if self.n_outputs == 1:
             out = out.reshape(X.shape[0], self.max_n_classes)
-        return out
+
+        # Since out in tensor basis criterion is optimal g of shape (n_samples, n_bases),
+        # if tb is not None, calculate bij from
+        # bij = sum^n_bases(Tij*g)
+        cdef np.ndarray[DOUBLE, ndim=2] bij
+        if tb is not None:
+            print("\nTensor basis is provided, the predictions are bij. ")
+            # Note bij has 6 outputs due to tensor symmetry
+            # Since out is 3D of shape (n_samples, n_bases, n_classes),
+            # do the same for bij, with n_classes = 1
+            bij = np.empty((X.shape[0], tb.shape[1], 1))
+            # Go through each sample then each output
+            for i in range(X.shape[0]):
+                for j in range(tb.shape[1]):
+                    # n_classes in 3rd D is 1 and is useless
+                    bij[i, j, 0] = np.dot(tb[i, j], out[i, :, 0])
+
+            return bij
+        else:
+
+            return out
 
     cpdef np.ndarray apply(self, object X):
-        """Finds the terminal region (=leaf node) for each sample in X."""
+        """Finds the terminal region (=leaf node) for each sample in X.
+        
+        Output is the leaf node index/id list for each test sample, shape (n_samples,)."""
         if issparse(X):
             return self._apply_sparse_csr(X)
         else:
             return self._apply_dense(X)
 
     cdef inline np.ndarray _apply_dense(self, object X):
-        """Finds the terminal region (=leaf node) for each sample in X."""
+        """Finds the terminal region (=leaf node) for each sample in X.
+        
+        Output is the leaf node index/id list for each test sample, shape (n_samples,)."""
 
         # Check input
         if not isinstance(X, np.ndarray):
@@ -857,11 +904,14 @@ cdef class Tree:
             raise ValueError("X.dtype should be np.float32, got %s" % X.dtype)
 
         # Extract input
+        # TODO: doesn't this basically copies X and a waste of memory?
         cdef DTYPE_t[:, :] X_ndarray = X
         cdef SIZE_t n_samples = X.shape[0]
 
         # Initialize output
+        # TODO: why 1D of n_samples?
         cdef np.ndarray[SIZE_t] out = np.zeros((n_samples,), dtype=np.intp)
+        # ndarray.data: Python buffer object pointing to the start of the array’s data
         cdef SIZE_t* out_ptr = <SIZE_t*> out.data
 
         # Initialize auxiliary data-structure
@@ -870,15 +920,27 @@ cdef class Tree:
 
         with nogil:
             for i in range(n_samples):
+                # self.nodes is also a pointer
                 node = self.nodes
-                # While node not a leaf
+                # While node not a leaf, i.e. not -1 but node_id = node_count
                 while node.left_child != _TREE_LEAF:
                     # ... and node.right_child != _TREE_LEAF:
+                    # If X at sample i and split feature is left to split threshold.
+                    # node.feature holds feature to split on current node
                     if X_ndarray[i, node.feature] <= node.threshold:
+                        # Then go left. left_child holds also the id of that node.
+                        # Take the address of that node's content since node is a pointer
                         node = &self.nodes[node.left_child]
+                    # Otherwise go right
                     else:
                         node = &self.nodes[node.right_child]
 
+                # For each sample i, out_ptr[i] is leaf node index,
+                # recall ptr[i] access value of the array ptr points to.
+                # self.nodes is pointer to index 0 of array of Node type struct of length node counts in tree.
+                # node is pointer to leaf node index's Node type struct.
+                # Pointer - pointer is difference between two pointers means number of elements of the type
+                # that would fit between the targets of the two pointers.
                 out_ptr[i] = <SIZE_t>(node - self.nodes)  # node offset
 
         return out
@@ -1163,8 +1225,18 @@ cdef class Tree:
         shape[1] = <np.npy_intp> self.n_outputs
         shape[2] = <np.npy_intp> self.max_n_classes
         cdef np.ndarray arr
+        # This is basically reshaping a block of memory back to numpy 3D array, using the pointer self.value
         arr = np.PyArray_SimpleNewFromData(3, shape, np.NPY_DOUBLE, self.value)
+        # Increment the reference count for object self.
+        # When an object's reference count = 0, it is deallocated
+        # TODO: still don't know why incref is needed here
         Py_INCREF(self)
+        # Base object if memory is from some other object.
+        # The base of an array that owns its memory is None,
+        # e.g. x = np.array([1, 2, 3]), x.base is None.
+        # Slicing creates a view, whose memory is shared with x,
+        # e.g. y = x[2:], y.base is x
+        # TODO: still don't know why rebase?
         arr.base = <PyObject*> self
         return arr
 

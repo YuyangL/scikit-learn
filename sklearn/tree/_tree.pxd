@@ -65,7 +65,9 @@ cdef class Tree:
     cdef np.ndarray _get_value_ndarray(self)
     cdef np.ndarray _get_node_ndarray(self)
 
-    cpdef np.ndarray predict(self, object X)
+    # In tensor basis mode, if tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
+    # then the prediction is bij = sum^n_bases(Tij*g)
+    cpdef np.ndarray predict(self, object X, np.ndarray[np.float64, ndim=3] tb=*)
 
     cpdef np.ndarray apply(self, object X)
     cdef np.ndarray _apply_dense(self, object X)
@@ -99,11 +101,10 @@ cdef class TreeBuilder:
     cdef double min_impurity_split
     cdef double min_impurity_decrease   # Impurity threshold for early stopping
 
-    # Additional kwargs of tb, bij
+    # Additional kwargs of tb
     cpdef build(self, Tree tree, object X, np.ndarray y,
                 np.ndarray sample_weight=*,
                 np.ndarray X_idx_sorted=*,
-                np.ndarray tb=*,
-                np.ndarray bij=*)
-    # Additional kwargs of tb, bij
-    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight, np.ndarray tb=*, np.ndarray bij=*)
+                np.ndarray[DOUBLE_t, ndim=3] tb=*)
+    # Additional kwargs of tb
+    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight, np.ndarray[DOUBLE_t, ndim=3] tb=*)

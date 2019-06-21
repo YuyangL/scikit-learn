@@ -98,7 +98,11 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                  # Split finding scheme to find best split amongst samples
                  split_finder="brute",
                  # Verbose in BestSplitter.node_split()
-                 split_verbose=False):
+                 split_verbose=False,
+                 # L2 regularization fraction to penalize large g during LS fit
+                 alpha_g_fit=0.,
+                 # L2 regularization coefficient to penalize large g during split finder
+                 alpha_g_split=0.):
         self.criterion = criterion
         self.splitter = splitter
         self.max_depth = max_depth
@@ -114,6 +118,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         self.presort = presort
         # Initialize extra kwargs too
         self.tb_verbose, self.split_finder, self.split_verbose = tb_verbose, split_finder, split_verbose
+        self.alpha_g_fit, self.alpha_g_split = alpha_g_fit, alpha_g_split
 
     def get_depth(self):
         """Returns the depth of the decision tree.
@@ -132,7 +137,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
-            tb=None, bij=None):
+            # Extra kwarg
+            tb=None):
         """
         If using tensor basis criterion, tensor basis tb and anisotropy tensor bij need to be supplied,
         y is only used to store best 10 tensor basis coefficients g.
@@ -214,11 +220,10 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # Check for tensor basis array input.
         # Also make sure tb is C-contiguous and np.float64, if it's not None
         # tb_mode will be used for Criterion.__cinit__()
-        if tb is not None and bij is not None:
+        if tb is not None:
             tb = __ensureContiguousDOUBLE(tb)
-            bij = __ensureContiguousDOUBLE(bij)
             self.tb_mode = True
-            print('\nFitting DBRT using tensor basis MSE criterion. \nBest tensor basis coefficients g are stored in y ')
+            print('\nFitting DBRT using tensor basis MSE criterion... ')
         else:
             self.tb_mode = False
 
@@ -319,10 +324,6 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                 raise ValueError("Number of tensor basis set=%d does not match "
                                  "number of samples=%d"%(len(tb), n_samples))
 
-            if len(bij) != n_samples:
-                raise ValueError("Number of anisotropy tensor =%d does not match "
-                                 "number of samples=%d"%(len(bij), n_samples))
-
         if expanded_class_weight is not None:
             if sample_weight is not None:
                 sample_weight = sample_weight * expanded_class_weight
@@ -401,9 +402,10 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                 criterion = CRITERIA_CLF[self.criterion](self.n_outputs_,
                                                          self.n_classes_)
             else:
-                # Addition arg of tb_mode to switch on/off tensor basis criterion; and tb_verbose for debugging
+                # Addition arg of tb_mode to switch on/off tensor basis criterion; and tb_verbose for debugging;
+                # and alpha_g_fit to penalize large optimal g during LS fit in tensor basis criterion
                 criterion = CRITERIA_REG[self.criterion](self.n_outputs_,
-                                                         n_samples, self.tb_mode, self.tb_verbose)
+                                                         n_samples, self.tb_mode, self.tb_verbose, self.alpha_g_fit)
 
         SPLITTERS = SPARSE_SPLITTERS if issparse(X) else DENSE_SPLITTERS
 
@@ -417,9 +419,15 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                                 self.presort,
                                                 # Additional args
                                                 split_finder_code,
-                                                self.split_verbose)
+                                                self.split_verbose,
+                                                self.alpha_g_split)
 
-        self.tree_ = Tree(self.n_features_, self.n_classes_, self.n_outputs_)
+        # Forcing n_outputs arg in Tree to be 10 -- same number of g instead of bij,
+        # so that prediction from Tree.predict() is g instead of bij
+        if not self.tb_mode:
+            self.tree_ = Tree(self.n_features, self.n_classes, self.n_outputs_)
+        else:
+            self.tree_ = Tree(self.n_features, self.n_classes, 10)
 
         # Use BestFirst if max_leaf_nodes given; use DepthFirst otherwise
         if max_leaf_nodes < 0:
@@ -439,7 +447,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                            min_impurity_split)
 
         # Addition of args of tb and bij regardless whether they are None
-        builder.build(self.tree_, X, y, sample_weight, X_idx_sorted, tb, bij)
+        builder.build(self.tree_, X, y, sample_weight, X_idx_sorted, tb)
 
         if self.n_outputs_ == 1:
             self.n_classes_ = self.n_classes_[0]
@@ -465,12 +473,18 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         return X
 
-    def predict(self, X, check_input=True):
+    def predict(self, X, check_input=True,
+                # Extra kwarg of tb for predicting bij
+                tb=None):
         """Predict class or regression value for X.
 
         For a classification model, the predicted class for each sample in X is
         returned. For a regression model, the predicted value based on X is
         returned.
+
+        If using tensor basis criterion, and tensor basis tb of shape (n_samples, n_outputs, n_bases) is supplied,
+        then anisotropy tensor bij of shape (n_samples, n_outputs) will be predicted,
+        using optimal g stored in each tree node.
 
         Parameters
         ----------
@@ -483,14 +497,24 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
             Allow to bypass several input checking.
             Don't use this parameter unless you know what you do.
 
+        tb : array-like, shape = [n_samples, n_outputs, n_bases], or None, optional (default=None)
+            If tensor basis tb is provided, then bij will be calculated using optimal g stored in each tree node
+            via bij = sum^n_bases(Tij*g).
+
         Returns
         -------
         y : array of shape = [n_samples] or [n_samples, n_outputs]
             The predicted classes, or the predict values.
+            Anistropy tensor bij of shape (n_samples, n_outputs) if tb is provided.
         """
         check_is_fitted(self, 'tree_')
         X = self._validate_X_predict(X, check_input)
-        proba = self.tree_.predict(X)
+        # Extra arg of tb.
+        # If tb is provided, then the prediction is assumed
+        # bij = sum^n_bases(Tij*g),
+        # where optimal g has been saved at each tree node.
+        # proba is then shape (n_samples, n_outputs, 1)
+        proba = self.tree_.predict(X, tb)
         n_samples = X.shape[0]
 
         # Classification
@@ -1182,7 +1206,11 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
                  # Provide scheme of finding the best split amongst samples
                  split_finder="brute",
                  # Verbose in BestSplitter.node_split()
-                 split_verbose=False):
+                 split_verbose=False,
+                 # L2 regularization fraction to penalize large g during LS fit
+                 alpha_g_fit=0.,
+                 # L2 regularization coefficient to penalize large g during split finder
+                 alpha_g_split=0.):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1199,11 +1227,13 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             # Extra kwargs
             tb_verbose=tb_verbose,
             split_finder=split_finder,
-            split_verbose=split_verbose)
+            split_verbose=split_verbose,
+            alpha_g_fit=alpha_g_fit,
+            alpha_g_split=alpha_g_split)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
-            tb=None, bij=None):
+            tb=None):
         """Build a decision tree regressor from the training set (X, y).
         If using tensor basis criterion, tb, tb_tb, tb_bij need to be supplied.
 
@@ -1254,8 +1284,7 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             sample_weight=sample_weight,
             check_input=check_input,
             X_idx_sorted=X_idx_sorted,
-            tb=tb,
-            bij=bij)
+            tb=tb)
         return self
 
 
@@ -1613,7 +1642,12 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
                  # Scheme of finding best split amongst samples
                  split_finder="brute",
                  # Verbose in BestSplitter.split_node()
-                 split_verbose=False):
+                 split_verbose=False,
+                 # L2 regularization fraction to penalize large g during LS fit
+                 alpha_g_fit=0.,
+                 # L2 regularization coefficient to penalize large g during split finder
+                 alpha_g_split=0.
+                 ):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1631,4 +1665,6 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
             # Scheme of finding best split amongst samples
             split_finder=split_finder,
             # Verbose in BestSplitter.split_node()
-            split_verbose=split_verbose)
+            split_verbose=split_verbose,
+            alpha_g_fit=alpha_g_fit,
+            alpha_g_split=alpha_g_split)

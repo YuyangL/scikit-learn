@@ -69,7 +69,9 @@ cdef class Splitter:
                   # Split finding scheme "encoded" to integer
                   int split_finder_code=1,
                   # Verbose on node splitting
-                  bint split_verbose=0):
+                  bint split_verbose=0,
+                  # L2 regularization coefficient on finding split
+                  double alpha_g_split=0.):
         """
         Parameters
         ----------
@@ -97,6 +99,10 @@ cdef class Splitter:
 
         split_verbose : bint, optional (default=0)
             Verbose in node_split()
+
+        alpha_g_split : double, optional (default=0.)
+            L2 regularization coefficient to penalize large optimal g during different splits.
+            The best split in this case is sub-optimal as well as g, but reduces overfitting
         """
 
         self.criterion = criterion
@@ -116,6 +122,7 @@ cdef class Splitter:
         self.presort = presort
         # Also initialize split_finder
         self.split_finder_code, self.split_verbose = split_finder_code, split_verbose
+        self.alpha_g_split = alpha_g_split
 
     def __dealloc__(self):
         """Destructor."""
@@ -133,17 +140,16 @@ cdef class Splitter:
 
     cdef int init(self,
                    object X,
-                   # Removing const status of y since it's changing in tensor basis criterion
-                   DOUBLE_t[:, ::1] y,
+                   const DOUBLE_t[:, ::1] y,
                    DOUBLE_t* sample_weight,
                    np.ndarray X_idx_sorted=None,
-                   # Additional kwargs
-                   DOUBLE_t[:, :, ::1] tb=None,
-                   DOUBLE_t[:, ::1] bij=None) except -1:
+                   # Additional kwarg
+                   DOUBLE_t[:, :, ::1] tb=None) except -1:
         """Initialize the splitter.
 
         Take in the input data X, the target Y, and optional sample weights.
-        For tensor basis criterion, tb, tb_tb, and tb_bij need to be supplied.
+        For tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
+        and y is anisotropy tensor of shape (n_samples, n_outputs).
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -155,7 +161,7 @@ cdef class Splitter:
 
         y : numpy.ndarray, dtype=DOUBLE_t
             This is the vector of targets, or true labels, for the samples.
-            For tensor basis criterion, this is resultant tensor basis coefficients g[n_samples, 10]
+            For tensor basis criterion, this is anisotropy tensor bij of shape (n_samples, n_outputs).
 
         sample_weight : numpy.ndarray, dtype=DOUBLE_t (optional)
             The weights of the samples, where higher weighted samples are fit
@@ -163,10 +169,7 @@ cdef class Splitter:
             are assumed to have uniform weight.
             
         tb : np.ndarray, dtype=DOUBLE_t, or None (optional)
-            Tensor basis matrix Tij, n_samples x 9 components x 10 bases, used for tensor basis criterion.
-            
-        bij : np.ndarray, dtype=DOUBLE_t, or None (optional)
-            Anisotropy tensor bij, n_samples x 10 bases, used for tensor basis criterion.
+            Tensor basis matrix Tij, n_samples x n_outputs x n_bases, used for tensor basis criterion.
         """
 
         self.rand_r_state = self.random_state.randint(0, RAND_R_MAX)
@@ -207,8 +210,8 @@ cdef class Splitter:
         safe_realloc(&self.constant_features, n_features)
 
         self.y = y
-        # Initialize tensor basis Tij, and bij
-        self.tb, self.bij = tb, bij
+        # Initialize tensor basis Tij
+        self.tb = tb
 
         self.sample_weight = sample_weight
         return 0
@@ -240,7 +243,7 @@ cdef class Splitter:
                             self.samples,
                             start,
                             end,
-                            self.tb, self.bij)
+                            self.tb)
 
         weighted_n_node_samples[0] = self.criterion.weighted_n_node_samples
         return 0
@@ -277,10 +280,10 @@ cdef class Splitter:
 
         return self.criterion.node_impurity()
 
-    cdef double* bestTensorBasisCoefficients(self, SIZE_t pos1, SIZE_t pos2) nogil:
-        """Return the best found 10 g's pointer by inserting the best sample intervals."""
-
-        return self.criterion._reconstructAnisotropyTensor(pos1, pos2)
+    # cdef double* bestTensorBasisCoefficients(self, SIZE_t pos1, SIZE_t pos2) nogil:
+    #     """Return the best found 10 g's pointer by inserting the best sample intervals."""
+    #
+    #     return self.criterion._reconstructAnisotropyTensor(pos1, pos2)
 
 cdef class BaseDenseSplitter(Splitter):
     cdef const DTYPE_t[:, :] X
@@ -294,9 +297,10 @@ cdef class BaseDenseSplitter(Splitter):
     def __cinit__(self, Criterion criterion, SIZE_t max_features,
                   SIZE_t min_samples_leaf, double min_weight_leaf,
                   object random_state, bint presort,
-                  # Additional kwarg
+                  # Additional kwargs
                   int split_finder_code=1,
-                  bint split_verbose=0):
+                  bint split_verbose=0,
+                  double alpha_g_split=0.):
 
         self.X_idx_sorted_ptr = NULL
         self.X_idx_sorted_stride = 0
@@ -304,6 +308,7 @@ cdef class BaseDenseSplitter(Splitter):
         self.presort = presort
         # Additional kwarg
         self.split_finder_code, self.split_verbose = split_finder_code, split_verbose
+        self.alpha_g_split = alpha_g_split
 
     def __dealloc__(self):
         """Destructor."""
@@ -312,13 +317,14 @@ cdef class BaseDenseSplitter(Splitter):
 
     cdef int init(self,
                   object X,
-                  DOUBLE_t[:, ::1] y,
+                  const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
                   np.ndarray X_idx_sorted=None,
-                  DOUBLE_t[:, :, ::1] tb=None,
-                  DOUBLE_t[:, ::1] bij=None) except -1:
+                  # Additional kwarg
+                  DOUBLE_t[:, :, ::1] tb=None) except -1:
         """Initialize the splitter
-        For tensor basis criterion, tb needs to be supplied.
+        For tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
+        and y is anisotropy tensor of shape (n_samples, n_outputs).
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -327,7 +333,7 @@ cdef class BaseDenseSplitter(Splitter):
         # Call parent init
         # Additional args of tb
         # X_idx_sorted in Splitter.init() has no effect
-        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb, bij)
+        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb)
 
         self.X = X
 
@@ -430,7 +436,10 @@ cdef class BaseDenseSplitter(Splitter):
         cdef BrentResults returns
 
         # Initial f(x), can be negative
-        fx = self.criterion.proxy_impurity_improvement_pipeline(x)
+        fx = self.criterion.proxy_impurity_improvement_pipeline(x,
+                                                                self.min_samples_leaf,
+                                                                self.min_weight_leaf,
+                                                                self.alpha_g_split)
         if self.split_verbose:
             printf("\n     Initial proxy impurity improvement: %8.8f ", fx)
 
@@ -512,7 +521,10 @@ cdef class BaseDenseSplitter(Splitter):
                 u = x - tol
 
             # Update f(x) after incorporating the tolerance
-            fu = self.criterion.proxy_impurity_improvement_pipeline(u)
+            fu = self.criterion.proxy_impurity_improvement_pipeline(u,
+                                                                    self.min_samples_leaf,
+                                                                self.min_weight_leaf,
+                                                                self.alpha_g_split)
             # Again, avoid f(u) FPE when getting the reciprocal
             if -1e-14 < fu < 1e-14:
                 fu = 1e-14 if fu > 0. else -1e-14
@@ -578,7 +590,8 @@ cdef class BestSplitter(BaseDenseSplitter):
                                self.presort,
                                # Extra args
                                self.split_finder_code,
-                               self.split_verbose), self.__getstate__())
+                               self.split_verbose,
+                               self.alpha_g_split), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -597,6 +610,7 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t* constant_features = self.constant_features
         cdef SIZE_t n_features = self.n_features
 
+        # Feature values initialized as list of 0
         cdef DTYPE_t* Xf = self.feature_values
         cdef SIZE_t max_features = self.max_features
         cdef SIZE_t min_samples_leaf = self.min_samples_leaf
@@ -605,16 +619,18 @@ cdef class BestSplitter(BaseDenseSplitter):
 
         cdef INT32_t* X_idx_sorted = self.X_idx_sorted_ptr
         cdef SIZE_t* sample_mask = self.sample_mask
-        # Best left and right branch 10 g for tensor basis criterion.
-        # Pointers to the memory address of g_node in _reconstructAnisotropyTensor(),
-        # changing with g_node's memory address
-        cdef double* g_node_lptr
-        cdef double* g_node_rptr
-        # Pointers to another memory address of 10, not affected by changing g_node's memory address,
-        # to "save progress"
-        cdef double* g_l = <double*> calloc(10, sizeof(double))
-        cdef double* g_r = <double*> calloc(10, sizeof(double))
 
+        # # Best left and right branch 10 g for tensor basis criterion.
+        # # Pointers to the memory address of g_node in _reconstructAnisotropyTensor(),
+        # # changing with g_node's memory address
+        # cdef double* g_node_lptr
+        # cdef double* g_node_rptr
+        # # Pointers to another memory address of 10, not affected by changing g_node's memory address,
+        # # to "save progress"
+        # cdef double* g_l = <double*> calloc(10, sizeof(double))
+        # cdef double* g_r = <double*> calloc(10, sizeof(double))
+
+        # SplitRecord struct contains feature, pos, threshold, improvement, impurity_left/right
         cdef SplitRecord best, current
         cdef double current_proxy_improvement = -INFINITY
         cdef double best_proxy_improvement = -INFINITY
@@ -629,8 +645,8 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t feature_offset
         cdef SIZE_t i
         cdef SIZE_t j
-        # Tensor basis criterion related iterators to avoid any unintentional overwrite of other iterators
-        cdef SIZE_t isorted, iunsorted, ibasis
+        # # Tensor basis criterion related iterators to avoid any unintentional overwrite of other iterators
+        # cdef SIZE_t isorted, iunsorted, ibasis
 
         cdef SIZE_t n_visited_features = 0
         # Number of features discovered to be constant during the split search
@@ -642,17 +658,18 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t n_total_constants = n_known_constants
         cdef DTYPE_t current_feature_value
         cdef SIZE_t partition_end
-        cdef double best_pos
-        cdef double brent_start
-        cdef double brent_end
-        cdef double xtol = 1e-4
-        cdef double rtol = 1e-4
+        cdef double best_pos, pos_double
+        cdef double brent_start, brent_end
+        # Brent optimization absolute and relative tolerance
+        cdef double xtol = 1e-6
+        cdef double rtol = 1e-6
+        # If using "1000" split_scheme, pstep is capped to 1000
         cdef SIZE_t pstep = max(1, (end - start)/1000) if self.split_finder_code == 1000 else 1
         if self.split_verbose:
             if self.split_finder_code == 0:
                 printf("\n    Using Brent optimization to find the best split of each node... ")
             elif self.split_finder_code == 1000:
-                printf('\n    Using limited brute force to find the best split of each node... ')
+                printf('\n    Using brute force capped to 1000 splits to find the best split of each node... ')
             else:
                 printf('\n    Using brute force to find the best split of each node... ')
 
@@ -798,7 +815,6 @@ cdef class BestSplitter(BaseDenseSplitter):
                             # Split value
                             # sum of halves is used to avoid infinite value
                             current.threshold = Xf[current.pos - 1] / 2.0 + Xf[current.pos] / 2.0
-                            # TODO: not sure the usage of this
                             if ((current.threshold == Xf[current.pos]) or
                                 (current.threshold == INFINITY) or
                                 (current.threshold == -INFINITY)):
@@ -807,36 +823,41 @@ cdef class BestSplitter(BaseDenseSplitter):
 
                             # Best is the final record of the best split
                             best = current  # copy
-                            # After best split is found, calculate 10 g again using best split location
-                            # for both left and right branch.
-                            # Has to be in the feature loop since samples are changing every non-constant feature
-                            if self.tb is not None and self.bij is not None:
-                                # Return is a pointer to MSE.g_node which is another pointer
-                                # to the memory address of 10 g_node
-                                g_node_lptr = self.bestTensorBasisCoefficients(start, current.pos)
-                                # Since g_node is calculated again for right branch
-                                # which changes conten g_node is pointing to,
-                                # copy memory to a new memory block pointed by g_l.
-                                # memcpy(dest, src) doesn't alter content dest is pointing to
-                                # even if src's content is changed later
-                                memcpy(g_l, g_node_lptr, 10*sizeof(double))
-                                # Repeat for the right branch
-                                g_node_rptr = self.bestTensorBasisCoefficients(current.pos, end)
-                                memcpy(g_r, g_node_rptr, 10*sizeof(double))
-                                # Change y(g)'s content at corresponding points, i.e.
-                                # change whatever is in left branch to g_l, vice versa.
-                                # Go through all sorted points from start to end of this node
-                                for isorted in range(start, end):
-                                    # Get the original unsorted index
-                                    iunsorted = samples[isorted]
-                                    # For each sample in this node, go through every tensor basis
-                                    for ibasis in range(10):
-                                        # If the sorted index is left to best.pos, then use best g of left branch;
-                                        # vice versa
-                                        if p < best.pos:
-                                            self.y[iunsorted, ibasis] = g_l[ibasis]
-                                        else:
-                                            self.y[iunsorted, ibasis] = g_r[ibasis]
+
+                            # # After best split is found, calculate 10 g again using best split location
+                            # # for both left and right branch.
+                            # # Has to be in the feature loop since samples are changing every non-constant feature
+                            # if self.tb is not None:
+                            #     # Recalculate left and right g_node using best split position
+                            #     self.criterion._reconstructAnisotropyTensor(start, best.pos)
+                            #     memcpy(g_l, g_node_lptr)
+                            #     # Return is a pointer to MSE.g_node which is another pointer
+                            #     # to the memory address of 10 g_node
+                            #     g_node_lptr = self.bestTensorBasisCoefficients(start, best.pos)
+                            #     # Since g_node is calculated again for right branch
+                            #     # which changes conten g_node is pointing to,
+                            #     # copy memory to a new memory block pointed by g_l.
+                            #     # memcpy(dest, src) doesn't alter content dest is pointing to
+                            #     # even if src's content is changed later
+                            #     memcpy(g_l, g_node_lptr, 10*sizeof(double))
+                            #     # Repeat for the right branch
+                            #     g_node_rptr = self.bestTensorBasisCoefficients(best.pos, end)
+                            #     memcpy(g_r, g_node_rptr, 10*sizeof(double))
+                            #     # Change y(g)'s content at corresponding points, i.e.
+                            #     # change whatever is in left branch to g_l, vice versa.
+                            #     # Go through all sorted points from start to end of this node
+                            #     for isorted in range(start, end):
+                            #         # Get the original unsorted index
+                            #         iunsorted = samples[isorted]
+                            #         # For each sample in this node, go through every tensor basis
+                            #         for ibasis in range(10):
+                            #             # If the sorted index is left to best.pos, then use best g of left branch;
+                            #             # vice versa
+                            #             if p < best.pos:
+                            #                 self.y[iunsorted, ibasis] = g_l[ibasis]
+                            #             else:
+                            #                 self.y[iunsorted, ibasis] = g_r[ibasis]
+
 
                     # Else if split_finder is "brute" or "1000"
                     else:
@@ -856,35 +877,43 @@ cdef class BestSplitter(BaseDenseSplitter):
                             if p < end:
                                 current.pos = p
 
-                                # Reject if min_samples_leaf is not guaranteed
-                                if (((current.pos - start) < min_samples_leaf) or
-                                        ((end - current.pos) < min_samples_leaf)):
-                                    continue
-
-                                # Derive and update sum_left, sum_right from current.pos and sum_total
-                                # and set Criterion.pos to current.pos
-                                self.criterion.update(current.pos)
-
-                                # Reject if min_weight_leaf is not satisfied
-                                if ((self.criterion.weighted_n_left < min_weight_leaf) or
-                                        (self.criterion.weighted_n_right < min_weight_leaf)):
-                                    continue
-
-                                # For default MSE
-                                # Having derived sum_left and sum_right, calculate interim pseudo impurity improvement as
-                                # sum_left(y)^2/n_left + sum_right(y)^2/n_right, higher is better.
-                                # Basically mean(y_left)^2 + mean(y_right)^2, higher is better
+                                # # Reject if min_samples_leaf is not guaranteed
+                                # if (((current.pos - start) < min_samples_leaf) or
+                                #         ((end - current.pos) < min_samples_leaf)):
+                                #     continue
                                 #
-                                # For tensor basis MSE, impurity improvement becomes (sum_left + sum_right) due to a
-                                # slight definition change of sum_*
-                                current_proxy_improvement = self.criterion.proxy_impurity_improvement()
+                                # # Derive and update sum_left, sum_right from current.pos and sum_total
+                                # # and set Criterion.pos to current.pos
+                                # self.criterion.update(current.pos)
+                                #
+                                # # Reject if min_weight_leaf is not satisfied
+                                # if ((self.criterion.weighted_n_left < min_weight_leaf) or
+                                #         (self.criterion.weighted_n_right < min_weight_leaf)):
+                                #     continue
+                                #
+                                # # For default MSE
+                                # # Having derived sum_left and sum_right, calculate interim pseudo impurity improvement as
+                                # # sum_left(y)^2/n_left + sum_right(y)^2/n_right, higher is better.
+                                # # Basically mean(y_left)^2 + mean(y_right)^2, higher is better
+                                # #
+                                # # For tensor basis MSE, impurity improvement becomes (sum_left + sum_right) due to a
+                                # # slight definition change of sum_*
+                                # current_proxy_improvement = self.criterion.proxy_impurity_improvement()
+
+                                # Cast current.pos to double since proxy_impurity_improvement_pipeline()
+                                # takes double split location to accomodate Brent optimization split finder
+                                pos_double = <double> current.pos
+                                current_proxy_improvement = self.criterion.proxy_impurity_improvement_pipeline(
+                                        pos_double,
+                                        min_samples_leaf,
+                                        min_weight_leaf,
+                                        self.alpha_g_split)
 
                                 if current_proxy_improvement > best_proxy_improvement:
                                     best_proxy_improvement = current_proxy_improvement
                                     # Split value
                                     # sum of halves is used to avoid infinite value
                                     current.threshold = Xf[p - 1] / 2.0 + Xf[p] / 2.0
-                                    # TODO: what's 1st condition?
                                     if ((current.threshold == Xf[p]) or
                                         (current.threshold == INFINITY) or
                                         (current.threshold == -INFINITY)):
@@ -892,21 +921,23 @@ cdef class BestSplitter(BaseDenseSplitter):
                                         current.threshold = Xf[p - 1]
 
                                     best = current  # copy
-                                    # After best split for a feature is found,
-                                    # calculate 10 g again using best split location for both left and right branch.
-                                    # Has to be in the feature loop since samples are changing every non-constant feature
-                                    if self.tb is not None and self.bij is not None:
-                                        g_node_lptr = self.bestTensorBasisCoefficients(start, current.pos)
-                                        memcpy(g_l, g_node_lptr, 10*sizeof(double))
-                                        g_node_rptr = self.bestTensorBasisCoefficients(current.pos, end)
-                                        memcpy(g_r, g_node_rptr, 10*sizeof(double))
-                                        for isorted in range(start, end):
-                                            iunsorted = samples[isorted]
-                                            for ibasis in range(10):
-                                                if p < best.pos:
-                                                    self.y[iunsorted, ibasis] = g_l[ibasis]
-                                                else:
-                                                    self.y[iunsorted, ibasis] = g_r[ibasis]
+
+                                    # # After best split for a feature is found,
+                                    # # calculate 10 g again using best split location for both left and right branch.
+                                    # # Has to be in the feature loop since samples are changing every non-constant feature
+                                    # if self.tb is not None:
+                                    #     g_node_lptr = self.bestTensorBasisCoefficients(start, current.pos)
+                                    #     memcpy(g_l, g_node_lptr, 10*sizeof(double))
+                                    #     g_node_rptr = self.bestTensorBasisCoefficients(current.pos, end)
+                                    #     memcpy(g_r, g_node_rptr, 10*sizeof(double))
+                                    #     for isorted in range(start, end):
+                                    #         iunsorted = samples[isorted]
+                                    #         for ibasis in range(10):
+                                    #             if p < best.pos:
+                                    #                 self.y[iunsorted, ibasis] = g_l[ibasis]
+                                    #             else:
+                                    #                 self.y[iunsorted, ibasis] = g_r[ibasis]
+
 
         # Reorganize into samples[start:best.pos] + samples[best.pos:end]
         if self.split_verbose:
@@ -958,10 +989,11 @@ cdef class BestSplitter(BaseDenseSplitter):
         # Return values
         split[0] = best
         n_constant_features[0] = n_total_constants
-        # Free temporary pointer to left and right branch's g
-        if self.tb is not None and self.bij is not None:
-            free(g_l)
-            free(g_r)
+
+        # # Free temporary pointer to left and right branch's g
+        # if self.tb is not None and self.bij is not None:
+        #     free(g_l)
+        #     free(g_r)
 
         return 0
 
@@ -1088,10 +1120,7 @@ cdef class RandomSplitter(BaseDenseSplitter):
                                  self.min_samples_leaf,
                                  self.min_weight_leaf,
                                  self.random_state,
-                                 self.presort,
-                                 # Extra kwargs
-                                 self.split_finder_code,
-                                 self.split_verbose), self.__getstate__())
+                                 self.presort), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -1313,7 +1342,8 @@ cdef class BaseSparseSplitter(Splitter):
                   object random_state, bint presort,
                   # Extra kwargs
                   int split_finder_code=1,
-                  bint split_verbose=0):
+                  bint split_verbose=0,
+                  double alpha_g_split=0.):
         # Parent __cinit__ is automatically called
 
         self.X_data = NULL
@@ -1332,14 +1362,13 @@ cdef class BaseSparseSplitter(Splitter):
 
     cdef int init(self,
                   object X,
-                  DOUBLE_t[:, ::1] y,
+                  const DOUBLE_t[:, ::1] y,
                   DOUBLE_t* sample_weight,
                   np.ndarray X_idx_sorted=None,
-                  DOUBLE_t[:, :, ::1] tb=None,
-                  DOUBLE_t[:, ::1] bij=None) except -1:
+                  DOUBLE_t[:, :, ::1] tb=None) except -1:
         """Initialize the splitter.
-        For tensor basis criterion, tensor basis tb and anisotropy tensor bij need to be supplied,
-        and y is only used to store best 10 tensor basis coefficients g.
+        For tensor basis criterion, tensor basis tb of shape (n_samples, n_outputs, n_bases) needs to be supplied,
+        and y is anisotropy tensor of shape (n_samples, n_outputs).
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
         or 0 otherwise.
@@ -1347,7 +1376,7 @@ cdef class BaseSparseSplitter(Splitter):
         # Call parent init
         # Also provide arg of tb and bij even if they're None
         # X_idx_sorted has no effect in Splitter.init()
-        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb, bij)
+        Splitter.init(self, X, y, sample_weight, X_idx_sorted, tb)
 
         if not isinstance(X, csc_matrix):
             raise ValueError("X should be in csc format")
@@ -1639,10 +1668,7 @@ cdef class BestSparseSplitter(BaseSparseSplitter):
                                      self.min_samples_leaf,
                                      self.min_weight_leaf,
                                      self.random_state,
-                                     self.presort,
-                                     # Extra args
-                                     self.split_finder_code,
-                                     self.split_verbose), self.__getstate__())
+                                     self.presort), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
@@ -1875,10 +1901,7 @@ cdef class RandomSparseSplitter(BaseSparseSplitter):
                                        self.min_samples_leaf,
                                        self.min_weight_leaf,
                                        self.random_state,
-                                       self.presort,
-                                       # Extra args
-                                       self.split_finder_code,
-                                       self.split_verbose), self.__getstate__())
+                                       self.presort), self.__getstate__())
 
     cdef int node_split(self, double impurity, SplitRecord* split,
                         SIZE_t* n_constant_features) nogil except -1:
