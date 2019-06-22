@@ -863,12 +863,12 @@ cdef class Tree:
         # Since out in tensor basis criterion is optimal g of shape (n_samples, n_bases),
         # if tb is not None, calculate bij from
         # bij = sum^n_bases(Tij*g)
-        cdef np.ndarray[DOUBLE_t, ndim=2] bij
+        # Since out is 3D of shape (n_samples, n_bases, n_classes),
+        # do the same for bij, with n_classes = 1
+        cdef np.ndarray[DOUBLE_t, ndim=3] bij
         if tb is not None:
             print("\nTensor basis is provided, the predictions are bij. ")
-            # Note bij has 6 outputs due to tensor symmetry
-            # Since out is 3D of shape (n_samples, n_bases, n_classes),
-            # do the same for bij, with n_classes = 1
+            # Note bij can have 6 outputs due to tensor symmetry
             bij = np.empty((X.shape[0], tb.shape[1], 1))
             # Go through each sample then each output
             for i in range(X.shape[0]):

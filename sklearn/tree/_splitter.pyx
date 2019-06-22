@@ -540,6 +540,7 @@ cdef class BaseDenseSplitter(Splitter):
             # Update a, b, v, w, and x
             # If a lower f(x) is found
             if fu <= fx:
+                # TODO: implement early stop if new bound moves less than 1 integer -- useless
                 if self.split_verbose:
                     printf("\n     Proxy impurity improvement from %8.8f to %8.8f ", -fx, -fu)
 
