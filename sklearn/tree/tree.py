@@ -425,9 +425,9 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # Forcing n_outputs arg in Tree to be 10 -- same number of g instead of bij,
         # so that prediction from Tree.predict() is g instead of bij
         if not self.tb_mode:
-            self.tree_ = Tree(self.n_features, self.n_classes, self.n_outputs_)
+            self.tree_ = Tree(self.n_features_, self.n_classes_, self.n_outputs_)
         else:
-            self.tree_ = Tree(self.n_features, self.n_classes, 10)
+            self.tree_ = Tree(self.n_features_, self.n_classes_, 10)
 
         # Use BestFirst if max_leaf_nodes given; use DepthFirst otherwise
         if max_leaf_nodes < 0:
