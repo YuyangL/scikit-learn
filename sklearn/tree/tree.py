@@ -246,6 +246,12 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                                  % self.min_samples_leaf)
             min_samples_leaf = int(ceil(self.min_samples_leaf * n_samples))
 
+        # In tensor basis criterion, doesn't make sense to have less than 2 samples in a leaf node.
+        # Because we want to at least find 2 samples alike and find an overdetermined unique set of 10 g.
+        # Otherwise, if only 1 sample, then g is underdetermined from bij[6 x 1] and Tij[6 x 10] thus not unique
+        if self.tb_mode:
+            min_samples_leaf = max(2, min_samples_leaf)
+
         if isinstance(self.min_samples_split, (numbers.Integral, np.integer)):
             if not 2 <= self.min_samples_split:
                 raise ValueError("min_samples_split must be an integer "
@@ -392,6 +398,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
             split_finder_code = 0
         elif self.split_finder == "1000":
             split_finder_code = 1000
+        elif self.split_finder == "auto":
+            split_finder_code = 10000
         else:
             split_finder_code = 1
 
@@ -473,9 +481,10 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         return X
 
-    def predict(self, X, check_input=True,
+    def predict(self, X,
                 # Extra kwarg of tb for predicting bij
-                tb=None):
+                tb=None,
+                check_input=True):
         """Predict class or regression value for X.
 
         For a classification model, the predicted class for each sample in X is
@@ -488,24 +497,24 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         Parameters
         ----------
-        X : array-like or sparse matrix of shape = [n_samples, n_features]
+        X : array-like or sparse matrix of shape = (n_samples, n_features)
             The input samples. Internally, it will be converted to
             ``dtype=np.float32`` and if a sparse matrix is provided
             to a sparse ``csr_matrix``.
+
+        tb : array-like, shape = (n_samples, n_outputs, n_bases), or None, optional (default=None)
+            If tensor basis tb is provided, then bij will be calculated using optimal g stored in each tree node
+            via bij = sum^n_bases(Tij*g).
 
         check_input : boolean, (default=True)
             Allow to bypass several input checking.
             Don't use this parameter unless you know what you do.
 
-        tb : array-like, shape = [n_samples, n_outputs, n_bases], or None, optional (default=None)
-            If tensor basis tb is provided, then bij will be calculated using optimal g stored in each tree node
-            via bij = sum^n_bases(Tij*g).
-
         Returns
         -------
-        y : array of shape = [n_samples] or [n_samples, n_outputs]
+        y : array of shape = (n_samples) or (n_samples, n_outputs)
             The predicted classes, or the predict values.
-            Anistropy tensor bij of shape (n_samples, n_outputs) if tb is provided.
+            Anisotropy tensor bij of shape (n_samples, n_outputs) if tb is provided.
         """
         check_is_fitted(self, 'tree_')
         X = self._validate_X_predict(X, check_input)

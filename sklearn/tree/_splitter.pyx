@@ -19,13 +19,11 @@ from ._criterion cimport Criterion
 
 from libc.stdlib cimport free
 from libc.stdlib cimport qsort
-# Import calloc for g_l and g_r in BestSplitter.node_split() for tensor basis criterion
-from libc.stdlib cimport calloc
 from libc.string cimport memcpy
 from libc.string cimport memset
 # Verbose best.pos for split and best.improvement
 from libc.stdio cimport printf
-from libc.math cimport sqrt, fabs
+from libc.math cimport sqrt, fabs, nearbyint
 
 import numpy as np
 cimport numpy as np
@@ -360,7 +358,7 @@ cdef class BaseDenseSplitter(Splitter):
 
         return 0
 
-    cdef BrentResults _brentSplitFinder(self, double a, double b, double epsi=1e-6, double t=1e-6) nogil:
+    cdef BrentResults _brentSplitFinder(self, double a, double b, double epsi=1e-8, double t=1e-7) nogil:
         """
         _brentSplitFinder seeks a local minimum of a function F(X) in an interval [A, B].
         Modified to use Criterion.proxy_impurity_improvement_pipeline() inherently.
@@ -417,20 +415,22 @@ cdef class BaseDenseSplitter(Splitter):
             Output, real FX, the value F(X).
         """
 
-        # Square of the inverse of the golden ratio
+        # v = w = x = a + (3 - sqrt(5))/2*(b - a)
         cdef double c = 0.5*(3. - sqrt(5.))
         # Lower and upper bound of x
         cdef double sa = a
         cdef double sb = b
-        # TODO: what's x, w, v, e
-        # Golden ratio point?
+        # x is least value of f, or most recent evaluation if tied
         cdef double x = sa + c*(b - a)
+        # w is point with next lowest value of f
         cdef double w = x
+        # v is previous w
         cdef double v = w
         cdef double d
         cdef double e = 0.
-        cdef double fx, fw, fv
+        cdef double fx, fu, fv, fw
         cdef double m, tol, t2
+        # u is last point at which f has been evaluated
         cdef double p, q, r, u
         # Since there're multiple returns, returns are grouped in BrentResults struct
         cdef BrentResults returns
@@ -443,11 +443,11 @@ cdef class BaseDenseSplitter(Splitter):
         if self.split_verbose:
             printf("\n     Initial proxy impurity improvement: %8.8f ", fx)
 
-        # First avoid FPE
-        if -1e-14 < fx < 1e-14:
-            fx = 1e-14 if fx > 0. else -1e-14
+        # # First avoid FPE
+        # if -1e-10 < fx < 1e-10:
+        #     fx = 1e-10 if fx > 0. else -1e-10
 
-        # Since we want to minimize f(x)
+        # Since we want to minimize f(x), take inverse
         fx = -fx
         # # Since we want to minimize f(x), take the reciprocal of proxy_impurity_improvement
         # if fx > 0.:
@@ -464,8 +464,9 @@ cdef class BaseDenseSplitter(Splitter):
         while 1:
             # Middle point
             m = 0.5*(sa + sb)
-            # Calculate tolerance
-            tol = epsi*fabs(x) + t
+            # Calculate tolerance, f is never evaluated at 2 points closer than tol
+            # tol = epsi*fabs(x) + t
+            tol = 0.5
             # Twice the tolerance
             t2 = 2.*tol
             # Check the stopping criterion
@@ -492,7 +493,6 @@ cdef class BaseDenseSplitter(Splitter):
                 # d is defined below
                 e = d
 
-            # TODO: if something happens, use parabolic interpolation
             if fabs(p) < fabs(0.5*q*r) and \
                 q*(sa - x) < p and \
                 p < q*(sb - x):
@@ -511,7 +511,6 @@ cdef class BaseDenseSplitter(Splitter):
                 # d is e*golden ratio
                 d = c*e
 
-            # TODO: why
             # f(x) must not be evaluated too close to x
             if tol <= fabs(d):
                 u = x + d
@@ -525,9 +524,9 @@ cdef class BaseDenseSplitter(Splitter):
                                                                     self.min_samples_leaf,
                                                                 self.min_weight_leaf,
                                                                 self.alpha_g_split)
-            # Again, avoid f(u) FPE when getting the reciprocal
-            if -1e-14 < fu < 1e-14:
-                fu = 1e-14 if fu > 0. else -1e-14
+            # # Again, avoid f(u) FPE when getting the reciprocal
+            # if -1e-10 < fu < 1e-10:
+            #     fu = 1e-10 if fu > 0. else -1e-10
 
             # Again, get inverse of f(u) to minimize
             fu = -fu
@@ -540,7 +539,6 @@ cdef class BaseDenseSplitter(Splitter):
             # Update a, b, v, w, and x
             # If a lower f(x) is found
             if fu <= fx:
-                # TODO: implement early stop if new bound moves less than 1 integer -- useless
                 if self.split_verbose:
                     printf("\n     Proxy impurity improvement from %8.8f to %8.8f ", -fx, -fu)
 
@@ -568,7 +566,6 @@ cdef class BaseDenseSplitter(Splitter):
                 else:
                     sb = u
 
-                # TODO: what's this
                 if fu <= fw or w == x:
                     v, fv = w, fw
                     w, fw = u, fu
@@ -661,16 +658,19 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t partition_end
         cdef double best_pos, pos_double
         cdef double brent_start, brent_end
-        # Brent optimization absolute and relative tolerance
-        cdef double xtol = 1e-6
-        cdef double rtol = 1e-6
-        # If using "1000" split_scheme, pstep is capped to 1000
-        cdef SIZE_t pstep = max(1, (end - start)/1000) if self.split_finder_code == 1000 else 1
+        # (Unused) Brent optimization absolute and relative tolerance
+        cdef double xtol = 1e-8
+        cdef double rtol = 1e-7
+        # If using "1000" split_scheme, pstep is capped to 1000.
+        # Else if using "auto" split_scheme, pstep is 1 when n_samples <= 1000
+        cdef SIZE_t pstep = <SIZE_t> max(1, nearbyint((end - start)/1000.)) if self.split_finder_code == 1000 else 1
         if self.split_verbose:
             if self.split_finder_code == 0:
                 printf("\n    Using Brent optimization to find the best split of each node... ")
             elif self.split_finder_code == 1000:
                 printf('\n    Using brute force capped to 1000 splits to find the best split of each node... ')
+            elif self.split_finder_code == 10000:
+                printf('\n    Using Brent optimization when sample size > 1000 to find the best split of each node... ')
             else:
                 printf('\n    Using brute force to find the best split of each node... ')
 
@@ -797,33 +797,42 @@ cdef class BestSplitter(BaseDenseSplitter):
 
                     # Go through every sample at current node
                     # If split_finder is "brent", then use Brent optimization to find the best split
-                    if self.split_finder_code == 0:
+                    # TODO: "auto" code
+                    if self.split_finder_code == 0 or \
+                            (self.split_finder_code == 10000 and (end - start) > 1000):
+                        current.pos = p
                         # TODO: not skipping constant feature values atm
                         # Before starting Brent optimization,
-                        # ensure left and right bin have at least min_samples_leaf samples
-                        brent_start, brent_end = p + min_samples_leaf, end - min_samples_leaf - 1
-                        # Brent optimization to find best split and corresponding pseudo impurity improvement
-                        brent_results = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
-                        # Current proxy improvement is this current feature
-                        # and is not necessarily the best among all features
-                        current_proxy_improvement = brent_results.fx
-                        # For a feature, if improvement is even larger than previous feature, save it
-                        if current_proxy_improvement > best_proxy_improvement:
-                            best_proxy_improvement = current_proxy_improvement
-                            # Update current.pos to best split of current feature,
-                            # which will be inherited by best
-                            current.pos = <SIZE_t> brent_results.x
-                            # Split value
-                            # sum of halves is used to avoid infinite value
-                            current.threshold = Xf[current.pos - 1] / 2.0 + Xf[current.pos] / 2.0
-                            if ((current.threshold == Xf[current.pos]) or
-                                (current.threshold == INFINITY) or
-                                (current.threshold == -INFINITY)):
-                                # Making sure current split value isn't +-INFINITY anymore
-                                current.threshold = Xf[current.pos - 1]
+                        # ensure left and right bin have at least min_samples_leaf samples.
+                        # Recall split is [start, pos - 1] and [pos, end - 1].
+                        # Later threshold is between pos - 1 and pos, i.e. split before pos
+                        brent_start, brent_end = p + min_samples_leaf, end - min_samples_leaf
+                        # Reject if min_samples_leaf is not guaranteed
+                        if brent_start <= brent_end:
+                            # Brent optimization to find best split and corresponding pseudo impurity improvement
+                            brent_results = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
+                            # Current proxy improvement is this current feature
+                            # and is not necessarily the best among all features
+                            current_proxy_improvement = brent_results.fx
+                            # For a feature, if improvement is even larger than previous feature, save it
+                            if current_proxy_improvement > best_proxy_improvement:
+                                best_proxy_improvement = current_proxy_improvement
+                                # Update current.pos to best split of current feature,
+                                # which will be inherited by best.
+                                # nearbyint() doesn't raise FE_INEXACT exception,
+                                # unlike rint()
+                                current.pos = <SIZE_t> nearbyint(brent_results.x)
+                                # Split value
+                                # sum of halves is used to avoid infinite value
+                                current.threshold = Xf[current.pos - 1] / 2.0 + Xf[current.pos] / 2.0
+                                if ((current.threshold == Xf[current.pos]) or
+                                    (current.threshold == INFINITY) or
+                                    (current.threshold == -INFINITY)):
+                                    # Making sure current split value isn't +-INFINITY anymore
+                                    current.threshold = Xf[current.pos - 1]
 
-                            # Best is the final record of the best split
-                            best = current  # copy
+                                # Best is the final record of the best split
+                                best = current  # copy
 
                             # # After best split is found, calculate 10 g again using best split location
                             # # for both left and right branch.
@@ -944,6 +953,8 @@ cdef class BestSplitter(BaseDenseSplitter):
         if self.split_verbose:
             printf("\n    Best split is %d with feature %d ", best.pos, best.feature)
 
+        # This check is because when there were no split cuz of min_samples_leaf or min_weight_leaf,
+        # best.pos has been initialized to end
         if best.pos < end:
             partition_end = end
             p = start

@@ -1304,7 +1304,8 @@ cdef class RegressionCriterion(Criterion):
         # TODO: not skipping constant feature values atm.
         #  Could provide void *args to support this feature
 
-        # Reject if min_samples_leaf is not guaranteed
+        # Reject if min_samples_leaf is not guaranteed.
+        # This should never be triggered in "brent" split_finder
         if (((split_pos_tmp - self.start) < min_samples_leaf) or
                 ((self.end - split_pos_tmp) < min_samples_leaf)):
             return -INFINITY
@@ -1312,7 +1313,8 @@ cdef class RegressionCriterion(Criterion):
         # sum_left/right, pos and weighted_n_left/right
         # are updated using current split index double
         self.update(split_pos_tmp)
-        # Reject if min_weight_leaf is not satisfied
+        # Reject if min_weight_leaf is not satisfied.
+        # This should never be triggered in "brent" split finder
         if ((self.weighted_n_left < min_weight_leaf) or
                 (self.weighted_n_right < min_weight_leaf)):
             return -INFINITY

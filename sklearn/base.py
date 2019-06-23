@@ -361,7 +361,9 @@ class RegressorMixin:
     """Mixin class for all regression estimators in scikit-learn."""
     _estimator_type = "regressor"
 
-    def score(self, X, y, sample_weight=None):
+    def score(self, X, y,
+              # Extra kwarg of tensor basis tb to predict anisotropy tensor bij (y)
+              tb=None, sample_weight=None):
         """Returns the coefficient of determination R^2 of the prediction.
 
         The coefficient R^2 is defined as (1 - u/v), where u is the residual
@@ -382,6 +384,13 @@ class RegressorMixin:
 
         y : array-like, shape = (n_samples) or (n_samples, n_outputs)
             True values for X.
+            In Tensor Basis Decision Tree or Tensor Basis Random Forest,
+            anisotropy tensor bij of shape (n_samples, n_outputs) if tb is provided.
+
+        tb : array-like, shape = (n_samples, n_outputs, n_bases), or None, optional (default=None)
+            If tensor basis tb is provided, then bij will be calculated using optimal g stored in each tree node
+            via bij = sum^n_bases(Tij*g).
+            The model should be 1 of Tensor Basis Decision Tree or Tensor Basis Random Forest.
 
         sample_weight : array-like, shape = [n_samples], optional
             Sample weights.
@@ -405,7 +414,8 @@ class RegressorMixin:
 
         from .metrics import r2_score
         from .metrics.regression import _check_reg_targets
-        y_pred = self.predict(X)
+        # For models other than TBDT or TBRF, predict() doesn't accept extra arg of tb
+        y_pred = self.predict(X, tb) if tb is not None else self.predict(X)
         # XXX: Remove the check in 0.23
         y_type, _, _, _ = _check_reg_targets(y, y_pred, None)
         if y_type == 'continuous-multioutput':

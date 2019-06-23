@@ -399,7 +399,9 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
     def _estimator_type(self):
         return self.estimator._estimator_type
 
-    def score(self, X, y=None):
+    def score(self, X, y=None,
+              # Extra kwarg of tensor basis
+              tb=None):
         """Returns the score on the given data, if the estimator has been refit.
 
         This uses the score defined by ``scoring`` where provided, and the
@@ -407,13 +409,19 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
 
         Parameters
         ----------
-        X : array-like, shape = [n_samples, n_features]
+        X : array-like, shape = (n_samples, n_features)
             Input data, where n_samples is the number of samples and
             n_features is the number of features.
 
-        y : array-like, shape = [n_samples] or [n_samples, n_output], optional
+        y : array-like, shape = (n_samples) or (n_samples, n_output), optional
             Target relative to X for classification or regression;
             None for unsupervised learning.
+            Anisotropy tensor bij of shape (n_samples, n_outputs) if tb is provided.
+
+        tb : array-like, shape = (n_samples, n_outputs, n_bases), or None, optional (default=None)
+            If tensor basis tb is provided, then bij will be calculated using optimal g stored in each tree node
+            via bij = sum^n_bases(Tij*g).
+            If not None, then the model should be one of Tensor Basis Decision Tree or Tensor Basis Random Forest.
 
         Returns
         -------
@@ -425,7 +433,12 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
                              "and the estimator doesn't provide one %s"
                              % self.best_estimator_)
         score = self.scorer_[self.refit] if self.multimetric_ else self.scorer_
-        return score(self.best_estimator_, X, y)
+        # Models other than TBDT and TBRF don't accept extra arg of tb
+        if tb is not None:
+
+            return score(self.best_estimator_, X, y, tb)
+        else:
+            return score(self.best_estimator_, X, y)
 
     def _check_is_fitted(self, method_name):
         if not self.refit:

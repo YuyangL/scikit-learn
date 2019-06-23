@@ -908,8 +908,7 @@ cdef class Tree:
         cdef DTYPE_t[:, :] X_ndarray = X
         cdef SIZE_t n_samples = X.shape[0]
 
-        # Initialize output
-        # TODO: why 1D of n_samples?
+        # Initialize output, storing indices of node
         cdef np.ndarray[SIZE_t] out = np.zeros((n_samples,), dtype=np.intp)
         # ndarray.data: Python buffer object pointing to the start of the array’s data
         cdef SIZE_t* out_ptr = <SIZE_t*> out.data
