@@ -284,10 +284,11 @@ class BaseEstimator:
         return repr_
 
     def __getstate__(self):
-        print('\nBaseEstimator __getstate__ ')
         try:
+            print('\nBaseEstimator __getstate__() ')
             state = super().__getstate__()
         except AttributeError:
+            print('\nBaseEstimator __getstate__(self.__dict__.copy()) ')
             state = self.__dict__.copy()
 
         if type(self).__module__.startswith('sklearn.'):
@@ -296,7 +297,6 @@ class BaseEstimator:
             return state
 
     def __setstate__(self, state):
-        print('\nBaseEstimator __setstate__ ')
         if type(self).__module__.startswith('sklearn.'):
             pickle_version = state.pop("_sklearn_version", "pre-0.18")
             if pickle_version != __version__:
@@ -307,8 +307,10 @@ class BaseEstimator:
                         self.__class__.__name__, pickle_version, __version__),
                     UserWarning)
         try:
+            print('\nBaseEstimator __setstate__(state) for unpickling ')
             super().__setstate__(state)
         except AttributeError:
+            print('\nBaseEstimator __setstate__(self.__dict__.update(state)) for unpickling ')
             self.__dict__.update(state)
 
     def _get_tags(self):

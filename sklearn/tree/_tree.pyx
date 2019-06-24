@@ -709,7 +709,7 @@ cdef class Tree:
 
     def __reduce__(self):
         """Reduce re-implementation, for pickling."""
-        print('\nn_outputs = {} during __reduce__() of pickling '.format(self.n_outputs))
+        print('\nn_outputs = {} during __reduce__() of Tree for pickling '.format(self.n_outputs))
         return (Tree, (self.n_features,
                        sizet_ptr_to_ndarray(self.n_classes, self.n_outputs),
                        self.n_outputs), self.__getstate__())
@@ -722,6 +722,7 @@ cdef class Tree:
         d["node_count"] = self.node_count
         d["nodes"] = self._get_node_ndarray()
         d["values"] = self._get_value_ndarray()
+        print('\nvalues shape = {} during __getstate__() of Tree '.format(d["values"].shape))
         return d
 
     def __setstate__(self, d):
@@ -744,12 +745,13 @@ cdef class Tree:
                 value_ndarray.shape != value_shape or
                 not value_ndarray.flags.c_contiguous or
                 value_ndarray.dtype != np.float64):
-            print("\nnode_ndarray.ndim {} = 1? ".format(node_ndarray.ndim))
-            print("\nnode_ndarray.dtype {0} = {1}? ".format(node_ndarray.dtype, NODE_DTYPE))
-            print("\nnode_ndarray.flags.c_contiguous {} is True? ".format(node_ndarray.flags.c_contiguous))
-            print("\nnode_ndarray.shape {0} = {1}? ".format(node_ndarray.shape, value_shape))
-            print("\nvalue_ndarray.flags.c_contiguous {} is True? ".format(value_ndarray.flags.c_contiguous))
-            print("\nvalue_ndarray.dtype {} = np.float64? ".format(value_ndarray.dtype))
+            print('\nTree __setstate__(): ')
+            print("\n node_ndarray.ndim {} = 1? ".format(node_ndarray.ndim))
+            print("\n node_ndarray.dtype {0} = {1}? ".format(node_ndarray.dtype, NODE_DTYPE))
+            print("\n node_ndarray.flags.c_contiguous {} is True? ".format(node_ndarray.flags.c_contiguous))
+            print("\n value_ndarray.shape {0} = {1}? ".format(value_ndarray.shape, value_shape))
+            print("\n value_ndarray.flags.c_contiguous {} is True? ".format(value_ndarray.flags.c_contiguous))
+            print("\n value_ndarray.dtype {} = np.float64? ".format(value_ndarray.dtype))
             raise ValueError('Did not recognise loaded array layout')
 
         self.capacity = node_ndarray.shape[0]
