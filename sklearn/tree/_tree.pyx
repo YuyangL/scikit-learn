@@ -709,6 +709,7 @@ cdef class Tree:
 
     def __reduce__(self):
         """Reduce re-implementation, for pickling."""
+        print('\nn_outputs = {} during __reduce__() of pickling '.format(self.n_outputs))
         return (Tree, (self.n_features,
                        sizet_ptr_to_ndarray(self.n_classes, self.n_outputs),
                        self.n_outputs), self.__getstate__())
@@ -743,6 +744,12 @@ cdef class Tree:
                 value_ndarray.shape != value_shape or
                 not value_ndarray.flags.c_contiguous or
                 value_ndarray.dtype != np.float64):
+            print("\nnode_ndarray.ndim {} = 1? ".format(node_ndarray.ndim))
+            print("\nnode_ndarray.dtype {0} = {1}? ".format(node_ndarray.dtype, NODE_DTYPE))
+            print("\nnode_ndarray.flags.c_contiguous {} is True? ".format(node_ndarray.flags.c_contiguous))
+            print("\nnode_ndarray.shape {0} = {1}? ".format(node_ndarray.shape, value_shape))
+            print("\nvalue_ndarray.flags.c_contiguous {} is True? ".format(value_ndarray.flags.c_contiguous))
+            print("\nvalue_ndarray.dtype {} = np.float64? ".format(value_ndarray.dtype))
             raise ValueError('Did not recognise loaded array layout')
 
         self.capacity = node_ndarray.shape[0]
@@ -866,10 +873,11 @@ cdef class Tree:
         # Since out is 3D of shape (n_samples, n_bases, n_classes),
         # do the same for bij, with n_classes = 1
         cdef np.ndarray[DOUBLE_t, ndim=3] bij
+        cdef SIZE_t i, j
         if tb is not None:
             print("\nTensor basis is provided, the predictions are bij. ")
             # Note bij can have 6 outputs due to tensor symmetry
-            bij = np.empty((X.shape[0], tb.shape[1], 1))
+            bij = np.empty((X.shape[0], tb.shape[1], self.max_n_classes))
             # Go through each sample then each output
             for i in range(X.shape[0]):
                 for j in range(tb.shape[1]):

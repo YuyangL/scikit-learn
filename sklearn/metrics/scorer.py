@@ -283,7 +283,9 @@ def check_scoring(estimator, scoring=None, allow_none=False):
                              'Please use `make_scorer` to convert a metric '
                              'to a scorer.' % scoring)
         return get_scorer(scoring)
+    # scoring is None by default in GridSearchCV()
     elif scoring is None:
+        # This is done for TBDT and TBRF
         if hasattr(estimator, 'score'):
             return _passthrough_scorer
         elif allow_none:
@@ -337,6 +339,7 @@ def _check_multimetric_scoring(estimator, scoring=None):
         True if scorer is a list/tuple or dict of callables
         False if scorer is None/str/callable
     """
+    # scoring is None be default in GridSearchCV()
     if callable(scoring) or scoring is None or isinstance(scoring,
                                                           str):
         scorers = {"score": check_scoring(estimator, scoring=scoring)}

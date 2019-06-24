@@ -102,7 +102,9 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                  # L2 regularization fraction to penalize large g during LS fit
                  alpha_g_fit=0.,
                  # L2 regularization coefficient to penalize large g during split finder
-                 alpha_g_split=0.):
+                 alpha_g_split=0.,
+                 # Cap of g magnitude during LS fit
+                 g_cap=None):
         self.criterion = criterion
         self.splitter = splitter
         self.max_depth = max_depth
@@ -119,6 +121,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # Initialize extra kwargs too
         self.tb_verbose, self.split_finder, self.split_verbose = tb_verbose, split_finder, split_verbose
         self.alpha_g_fit, self.alpha_g_split = alpha_g_fit, alpha_g_split
+        self.g_cap = g_cap
 
     def get_depth(self):
         """Returns the depth of the decision tree.
@@ -403,6 +406,9 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         else:
             split_finder_code = 1
 
+        if self.g_cap is None:
+            self.g_cap = np.inf
+
         # Build tree
         criterion = self.criterion
         if not isinstance(criterion, Criterion):
@@ -413,7 +419,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                 # Addition arg of tb_mode to switch on/off tensor basis criterion; and tb_verbose for debugging;
                 # and alpha_g_fit to penalize large optimal g during LS fit in tensor basis criterion
                 criterion = CRITERIA_REG[self.criterion](self.n_outputs_,
-                                                         n_samples, self.tb_mode, self.tb_verbose, self.alpha_g_fit)
+                                                         n_samples, self.tb_mode, self.tb_verbose, self.alpha_g_fit,
+                                                         self.g_cap)
 
         SPLITTERS = SPARSE_SPLITTERS if issparse(X) else DENSE_SPLITTERS
 
@@ -1219,7 +1226,9 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
                  # L2 regularization fraction to penalize large g during LS fit
                  alpha_g_fit=0.,
                  # L2 regularization coefficient to penalize large g during split finder
-                 alpha_g_split=0.):
+                 alpha_g_split=0.,
+                 # Cap of g magnitude during LS fit
+                 g_cap=None):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1238,7 +1247,8 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             split_finder=split_finder,
             split_verbose=split_verbose,
             alpha_g_fit=alpha_g_fit,
-            alpha_g_split=alpha_g_split)
+            alpha_g_split=alpha_g_split,
+            g_cap=g_cap)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
@@ -1655,8 +1665,9 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
                  # L2 regularization fraction to penalize large g during LS fit
                  alpha_g_fit=0.,
                  # L2 regularization coefficient to penalize large g during split finder
-                 alpha_g_split=0.
-                 ):
+                 alpha_g_split=0.,
+                 # Cap of g magnitude during LS fit
+                 g_cap=None):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1676,4 +1687,5 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
             # Verbose in BestSplitter.split_node()
             split_verbose=split_verbose,
             alpha_g_fit=alpha_g_fit,
-            alpha_g_split=alpha_g_split)
+            alpha_g_split=alpha_g_split,
+            g_cap=g_cap)

@@ -453,8 +453,12 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
             check_is_fitted(self, 'best_estimator_')
 
     @if_delegate_has_method(delegate=('best_estimator_', 'estimator'))
-    def predict(self, X):
+    def predict(self, X,
+                # Extra kwarg of tensor basis
+                tb=None):
         """Call predict on the estimator with the best found parameters.
+        If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided, the prediction is anisotropy tensor
+        bij.
 
         Only available if ``refit=True`` and the underlying estimator supports
         ``predict``.
@@ -465,9 +469,14 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
             Must fulfill the input assumptions of the
             underlying estimator.
 
+        tb : array-like of shape (n_samples, n_outputs, n_bases), or None, (default=None)
+            Tensor basis to convert learned tensor basis coefficients g to anisotropy tensor bij prediction.
+
         """
         self._check_is_fitted('predict')
-        return self.best_estimator_.predict(X)
+
+        # Return depending on whether tb is provided. If so, assume estimator.predict() takes tb
+        return self.best_estimator_.predict(X) if tb is None else self.best_estimator_.predict(X, tb)
 
     @if_delegate_has_method(delegate=('best_estimator_', 'estimator'))
     def predict_proba(self, X):
@@ -617,6 +626,7 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
         estimator = self.estimator
         cv = check_cv(self.cv, y, classifier=is_classifier(estimator))
 
+        # scorers essentially becomes estimator.score() function
         scorers, self.multimetric_ = _check_multimetric_scoring(
             self.estimator, scoring=self.scoring)
 
@@ -669,6 +679,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
                           " totalling {2} fits".format(
                               n_splits, n_candidates, n_candidates * n_splits))
 
+                # Here _fit_and_score() from _validation.py will be done.
+                # In TBDT and TBRF, tb is supplied in _fit_and_score through **fit_and_score_kwargs
                 out = parallel(delayed(_fit_and_score)(clone(base_estimator),
                                                        X, y,
                                                        train=train, test=test,

@@ -214,7 +214,7 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
 
         return sparse_hstack(indicators).tocsr(), n_nodes_ptr
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, tb=None, sample_weight=None):
         """Build a forest of trees from the training set (X, y).
 
         Parameters
@@ -227,6 +227,9 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         y : array-like, shape = [n_samples] or [n_samples, n_outputs]
             The target values (class labels in classification, real numbers in
             regression).
+
+        tb : array-like, shape = (n_samples, n_outputs, n_bases), or None, optional (default=None)
+            If tensor basis tb is provided, then tensor basis MSE criterion is enabled.
 
         sample_weight : array-like, shape = [n_samples] or None
             Sample weights. If None, then samples are equally weighted. Splits
@@ -248,6 +251,8 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         # Validate or convert input data
         X = check_array(X, accept_sparse="csc", dtype=DTYPE)
         y = check_array(y, accept_sparse='csc', ensure_2d=False, dtype=None)
+        # If tb is provided, check tb like the check of y
+        if tb is not None: tb = check_array(tb, ensure_2d=False, dtype=None)
         if sample_weight is not None:
             sample_weight = check_array(sample_weight, ensure_2d=False)
         if issparse(X):
@@ -276,6 +281,11 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
 
         if getattr(y, "dtype", None) != DOUBLE or not y.flags.contiguous:
             y = np.ascontiguousarray(y, dtype=DOUBLE)
+
+        # Ensure C-contiguous DOUBLE dtype of tb
+        if tb is not None:
+            if getattr(tb, "dtype", None) != DOUBLE or not tb.flags.contiguous:
+                tb = np.ascontiguousarray(tb, dtype=DOUBLE)
 
         if expanded_class_weight is not None:
             if sample_weight is not None:

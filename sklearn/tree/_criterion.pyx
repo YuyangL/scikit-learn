@@ -219,7 +219,7 @@ cdef class Criterion:
                           - (self.weighted_n_left /
                              self.weighted_n_node_samples * impurity_left)))
 
-    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, double alpha=0.) nogil:
+    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, double alpha=0., double cap=INFINITY) nogil:
         """
         Placeholder for a method in RegressionCriterion(Criterion).
         
@@ -235,6 +235,8 @@ cdef class Criterion:
         alpha : double
             The L2 regularization fraction to penalize large optimal g, from
             min_g||bij - (1 + alpha)Tij*g||^2
+        cap : double
+            Cap of g magnitude during LS fit
 
         Return
         ------
@@ -764,7 +766,8 @@ cdef class RegressionCriterion(Criterion):
             = (\sum_i^n y_i ** 2) - n_samples * y_bar ** 2
     """
 
-    def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples, bint tb_mode=0, bint tb_verbose=0, double alpha_g_fit=0.):
+    def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples, bint tb_mode=0, bint tb_verbose=0, double alpha_g_fit=0.,
+                  double g_cap=INFINITY):
         """Initialize parameters for this criterion.
 
         Parameters
@@ -806,6 +809,8 @@ cdef class RegressionCriterion(Criterion):
         self.se_dev = 0.
         # L2 regularization fraction for LS fit of g
         self.alpha_g_fit = alpha_g_fit
+        # Cap of g magnitude during LS fit
+        self.g_cap = g_cap
 
         # Tensor basis criterion switch and verbose option
         self.tb_mode, self.tb_verbose = tb_mode, tb_verbose
@@ -890,7 +895,8 @@ cdef class RegressionCriterion(Criterion):
 
     def __reduce__(self):
         # For pickling. Addition args of tb_mode, tb_verbose
-        return (type(self), (self.n_outputs, self.n_samples, self.tb_mode, self.tb_verbose, self.alpha_g_fit),
+        return (type(self), (self.n_outputs, self.n_samples, self.tb_mode, self.tb_verbose, self.alpha_g_fit,
+                             self.g_cap),
                 self.__getstate__())
 
     cdef int init(self, const DOUBLE_t[:, ::1] y, DOUBLE_t* sample_weight,
@@ -932,7 +938,7 @@ cdef class RegressionCriterion(Criterion):
             if self.tb_verbose:
                 printf("\n   Evaluating deviatoric SE for samples[start:end] of size %d ", self.n_node_samples)
 
-            _ = self._reconstructAnisotropyTensor(start, end, self.alpha_g_fit)
+            _ = self._reconstructAnisotropyTensor(start, end, self.alpha_g_fit, self.g_cap)
             # Then store 10 g for this node to be saved as prediction values of this node.
             # memcpy(dest, src) doesn't alter content dest is pointing to
             # even if src's content is changed later
@@ -972,7 +978,7 @@ cdef class RegressionCriterion(Criterion):
         self.reset()
         return 0
 
-    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, double alpha=0.) nogil:
+    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, double alpha=0., double cap=INFINITY) nogil:
         """For tensor basis MSE criterion, where Tij is supplemented,
         calculate the deviatoric summed square error self.se_dev scalar of sorted samples[pos1:pos2]
         to replace the functionality of self.sum_total/left/right n_outputs array.
@@ -1106,6 +1112,12 @@ cdef class RegressionCriterion(Criterion):
         # go through each basis and get corresponding g_node at this node
         # TODO: not sure if bij_node is shrinked from row x 1 to 10 x 1
         memcpy(g_node_tmp, bij_node, 10*sizeof(double))
+        # Cap g magnitude if a positive cap is provided
+        if cap != INFINITY and cap >= 0.:
+            for i2 in range(10):
+                if fabs(g_node_tmp[i2]) > cap:
+                    g_node_tmp[i2] = cap if g_node_tmp[i2] > 0. else -cap
+
         # Calculate reconstructed bij_hat at this node from Tij and g.
         # Manual dot product by aggregating each column (basis) in each row (component).
         for p in range(pos1, pos2):
@@ -1228,7 +1240,7 @@ cdef class RegressionCriterion(Criterion):
             # i.e. sum_left[start:new_pos] is sum_left[start:pos] + sum_left[pos:new_pos],
             # instead of calculating expensive sum_left[start:new_pos] every time new_pos is supplied.
             # However, in tensor basis criterion, sum_left has to be re-calculated in [start:new_pos] every time
-            _ = self._reconstructAnisotropyTensor(self.start, new_pos, self.alpha_g_fit)
+            _ = self._reconstructAnisotropyTensor(self.start, new_pos, self.alpha_g_fit, self.g_cap)
             # Assign g_node_tmp to g left to the split as g_node_tmp will soon be overwritten by right child
             memcpy(self.g_node_l, self.g_node_tmp, 10*sizeof(double))
             # Then set sum_left n_outputs array to self.se_dev scalar.
@@ -1242,7 +1254,7 @@ cdef class RegressionCriterion(Criterion):
             if self.tb_verbose:
                 printf("\n      Evaluating deviatoric SE for samples[split:end] of size %d ", (end - new_pos))
 
-            _ = self._reconstructAnisotropyTensor(new_pos, end, self.alpha_g_fit)
+            _ = self._reconstructAnisotropyTensor(new_pos, end, self.alpha_g_fit, self.g_cap)
             memcpy(self.g_node_r, self.g_node_tmp, 10*sizeof(double))
             for k in range(self.n_outputs):
                 self.sum_right[k] = self.se_dev
@@ -1324,12 +1336,12 @@ cdef class RegressionCriterion(Criterion):
         current_proxy_improvement = self.proxy_impurity_improvement()
 
         # If L2 regularization coefficient of the minimum split objective function is provided,
-        # perform Frobenius L2-norm on alpha*g
+        # perform Frobenius L2-norm on ||alpha*g||^2
         if self.tb_mode and alpha_g_split > 0.:
             # Accumulative penalty of all tensor bases
             for i in range(10):
-                g_l_penalty += alpha_g_split*self.g_node_l[i]**2.
-                g_r_penalty += alpha_g_split*self.g_node_r[i]**2.
+                g_l_penalty += (alpha_g_split*self.g_node_l[i])**2.
+                g_r_penalty += (alpha_g_split*self.g_node_r[i])**2.
 
             # Since impurity improvement is higher is better,
             # penalize it if optimal g_l and/or g_r are too large

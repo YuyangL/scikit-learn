@@ -142,7 +142,9 @@ def if_delegate_has_method(delegate):
                                             attribute_name=fn.__name__)
 
 
-def _safe_split(estimator, X, y, indices, train_indices=None):
+def _safe_split(estimator, X, y, indices, train_indices=None,
+                # Extra kwarg of tensor basis
+                tb=None):
     """Create subset of dataset and properly handle kernels.
 
     Slice X, y according to indices for cross-validation, but take care of
@@ -177,6 +179,10 @@ def _safe_split(estimator, X, y, indices, train_indices=None):
         If ``estimator._pairwise is True`` and ``train_indices is not None``,
         then ``train_indices`` will be use to slice the columns of X.
 
+    tb : array or None, default=None
+        Tensor basis Tij of shape (n_samples, n_outputs, n_bases).
+        If using Tensor Basis Decision Tree or Tensor Basis Random Forest, then tb is provided.
+
     Returns
     -------
     X_subset : array-like, sparse matrix or list
@@ -184,6 +190,9 @@ def _safe_split(estimator, X, y, indices, train_indices=None):
 
     y_subset : array-like, sparse matrix or list
         Indexed targets.
+
+    tb_subset : array-like
+        Indexed tensor basis. Only return if tb is provided, which is the case for TBDT or TBRF.
 
     """
     if getattr(estimator, "_pairwise", False):
@@ -205,4 +214,11 @@ def _safe_split(estimator, X, y, indices, train_indices=None):
     else:
         y_subset = None
 
-    return X_subset, y_subset
+    # If tb is provided, return extra tb after indexing it
+    if tb is not None:
+        tb_subset = safe_indexing(tb, indices)
+
+        return X_subset, y_subset, tb_subset
+    else:
+
+        return X_subset, y_subset

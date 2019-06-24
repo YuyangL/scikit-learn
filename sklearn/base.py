@@ -284,6 +284,7 @@ class BaseEstimator:
         return repr_
 
     def __getstate__(self):
+        print('\nBaseEstimator __getstate__ ')
         try:
             state = super().__getstate__()
         except AttributeError:
@@ -295,6 +296,7 @@ class BaseEstimator:
             return state
 
     def __setstate__(self, state):
+        print('\nBaseEstimator __setstate__ ')
         if type(self).__module__.startswith('sklearn.'):
             pickle_version = state.pop("_sklearn_version", "pre-0.18")
             if pickle_version != __version__:

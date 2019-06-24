@@ -76,7 +76,7 @@ cdef class Criterion:
                                                     double min_wight_leaf,
                                                     double alpha_g_split=*) nogil
     # Additional method to reconstruct anisotropy tensors
-    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, double alpha=*) nogil
+    cdef double* _reconstructAnisotropyTensor(self, SIZE_t pos1, SIZE_t pos2, double alpha=*, double cap=*) nogil
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""
@@ -93,6 +93,8 @@ cdef class RegressionCriterion(Criterion):
     cdef double se_dev
     # L2 regularization fraction for LS fit of g to penalize large optimal g
     cdef double alpha_g_fit
+    # Cap of g magnitude after LS fit
+    cdef double g_cap
     # Tensor basis criterion switch.
     # If tb is provided in DecisionTreeRegressor.fit(), then tb_mode is 1/True
     cdef bint tb_mode

@@ -603,6 +603,7 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t* samples = self.samples
         cdef SIZE_t start = self.start
         cdef SIZE_t end = self.end
+        cdef SIZE_t n_samples = end - start
 
         cdef SIZE_t* features = self.features
         cdef SIZE_t* constant_features = self.constant_features
@@ -669,8 +670,8 @@ cdef class BestSplitter(BaseDenseSplitter):
                 printf("\n    Using Brent optimization to find the best split of each node... ")
             elif self.split_finder_code == 1000:
                 printf('\n    Using brute force capped to 1000 splits to find the best split of each node... ')
-            elif self.split_finder_code == 10000:
-                printf('\n    Using Brent optimization when sample size > 1000 to find the best split of each node... ')
+            elif self.split_finder_code == 10000 and n_samples > 1000:
+                printf('\n    Using Brent optimization to find the best split of each node... ')
             else:
                 printf('\n    Using brute force to find the best split of each node... ')
 
@@ -797,9 +798,8 @@ cdef class BestSplitter(BaseDenseSplitter):
 
                     # Go through every sample at current node
                     # If split_finder is "brent", then use Brent optimization to find the best split
-                    # TODO: "auto" code
                     if self.split_finder_code == 0 or \
-                            (self.split_finder_code == 10000 and (end - start) > 1000):
+                            (self.split_finder_code == 10000 and n_samples > 1000):
                         current.pos = p
                         # TODO: not skipping constant feature values atm
                         # Before starting Brent optimization,
