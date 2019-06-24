@@ -687,6 +687,8 @@ cdef class Tree:
         safe_realloc(&self.n_classes, n_outputs)
 
         self.max_n_classes = np.max(n_classes)
+        print('\nn_classes is {0} in Tree.__cinit__() '.format(n_classes))
+        print('\nmax_n_classes is {} in Tree.__cinit__() '.format(self.max_n_classes))
         self.value_stride = n_outputs * self.max_n_classes
 
         cdef SIZE_t k
@@ -709,7 +711,7 @@ cdef class Tree:
 
     def __reduce__(self):
         """Reduce re-implementation, for pickling."""
-        print('\nn_outputs = {} during __reduce__() of Tree for pickling '.format(self.n_outputs))
+        print('\nn_outputs = {} during Tree.__reduce__() for pickling '.format(self.n_outputs))
         return (Tree, (self.n_features,
                        sizet_ptr_to_ndarray(self.n_classes, self.n_outputs),
                        self.n_outputs), self.__getstate__())
@@ -722,7 +724,7 @@ cdef class Tree:
         d["node_count"] = self.node_count
         d["nodes"] = self._get_node_ndarray()
         d["values"] = self._get_value_ndarray()
-        print('\nvalues shape = {} during __getstate__() of Tree '.format(d["values"].shape))
+        print('\nvalues shape = {} during Tree.__getstate__() for pickling '.format(d["values"].shape))
         return d
 
     def __setstate__(self, d):
@@ -745,7 +747,7 @@ cdef class Tree:
                 value_ndarray.shape != value_shape or
                 not value_ndarray.flags.c_contiguous or
                 value_ndarray.dtype != np.float64):
-            print('\nTree __setstate__(): ')
+            print('\nTree.__setstate__() for unpickling: ')
             print("\n node_ndarray.ndim {} = 1? ".format(node_ndarray.ndim))
             print("\n node_ndarray.dtype {0} = {1}? ".format(node_ndarray.dtype, NODE_DTYPE))
             print("\n node_ndarray.flags.c_contiguous {} is True? ".format(node_ndarray.flags.c_contiguous))
