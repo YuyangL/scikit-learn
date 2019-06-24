@@ -874,8 +874,8 @@ cdef class Tree:
         # Since out in tensor basis criterion is optimal g of shape (n_samples, n_bases),
         # if tb is not None, calculate bij from
         # bij = sum^n_bases(Tij*g)
-        # Since out is 3D of shape (n_samples, n_bases, n_classes),
-        # do the same for bij, with n_classes = 1
+        # Since out is 3D of shape (n_samples, n_bases, max_n_classes),
+        # do the same for bij, with max_n_classes = 1
         cdef np.ndarray[DOUBLE_t, ndim=3] bij
         cdef SIZE_t i, j
         if tb is not None:
@@ -885,7 +885,7 @@ cdef class Tree:
             # Go through each sample then each output
             for i in range(X.shape[0]):
                 for j in range(tb.shape[1]):
-                    # n_classes in 3rd D is 1 and is useless
+                    # max_n_classes in 3rd D is 1 and is useless
                     bij[i, j, 0] = np.dot(tb[i, j], out[i, :, 0])
 
             return bij

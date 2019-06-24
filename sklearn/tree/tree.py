@@ -442,6 +442,9 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         if not self.tb_mode:
             self.tree_ = Tree(self.n_features_, self.n_classes_, self.n_outputs_)
         else:
+            # Make sure n_classes has size 10 instead of 6/9 of bij.
+            # This ensures max_n_classes is always 1 for tensor basis criterion
+            self.n_classes_ = [1]*10
             self.tree_ = Tree(self.n_features_, self.n_classes_, 10)
 
         # Use BestFirst if max_leaf_nodes given; use DepthFirst otherwise
