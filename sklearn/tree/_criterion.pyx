@@ -20,7 +20,7 @@ from libc.stdlib cimport calloc
 from libc.stdlib cimport free
 from libc.string cimport memcpy, memmove
 from libc.string cimport memset
-from libc.math cimport fabs
+from libc.math cimport fabs, nearbyint
 # To verbose tensor basis criterion
 from libc.stdio cimport printf
 
@@ -1311,11 +1311,8 @@ cdef class RegressionCriterion(Criterion):
         cdef SIZE_t i
         cdef double g_l_penalty = 0.
         cdef double g_r_penalty = 0.
-        # Cast int type on the double sample split index
-        cdef SIZE_t split_pos_tmp = <SIZE_t> split_pos
-        # TODO: not skipping constant feature values atm.
-        #  Could provide void *args to support this feature
-
+        # Cast int type on the double sample split index, take nearest integer (still float)
+        cdef SIZE_t split_pos_tmp = <SIZE_t> nearbyint(split_pos)
         # Reject if min_samples_leaf is not guaranteed.
         # This should never be triggered in "brent" split_finder
         if (((split_pos_tmp - self.start) < min_samples_leaf) or

@@ -360,7 +360,7 @@ cdef class BaseDenseSplitter(Splitter):
 
     cdef BrentResults _brentSplitFinder(self, double a, double b, double epsi=1e-8, double t=1e-7) nogil:
         """
-        _brentSplitFinder seeks a local minimum of a function F(X) in an interval [A, B].
+        _brentSplitFinder seeks a local minimum of a function F(X) in an interval (A, B)
         Modified to use Criterion.proxy_impurity_improvement_pipeline() inherently.
         Since higher proxy impurity improvement is better, F(x) becomes -F(X) to minimize. 
         
@@ -415,7 +415,14 @@ cdef class BaseDenseSplitter(Splitter):
             Output, real FX, the value F(X).
         """
 
-        # v = w = x = a + (3 - sqrt(5))/2*(b - a)
+        # Bringing tolerance out of while loop since it's constant here
+        cdef double tol = 0.25
+        # Twice the tolerance
+        cdef double t2 = 2.*tol
+        # Make sure impurity improvement can be evaluated at a and b border
+        a -= tol
+        b -= tol
+        # v = w = x = a + (3 - sqrt(5))/2*(b - a) = a + 0.381966(b - a)
         cdef double c = 0.5*(3. - sqrt(5.))
         # Lower and upper bound of x
         cdef double sa = a
@@ -429,7 +436,7 @@ cdef class BaseDenseSplitter(Splitter):
         cdef double d
         cdef double e = 0.
         cdef double fx, fu, fv, fw
-        cdef double m, tol, t2
+        cdef double m
         # u is last point at which f has been evaluated
         cdef double p, q, r, u
         # Since there're multiple returns, returns are grouped in BrentResults struct
@@ -464,18 +471,17 @@ cdef class BaseDenseSplitter(Splitter):
         while 1:
             # Middle point
             m = 0.5*(sa + sb)
-            # Calculate tolerance, f is never evaluated at 2 points closer than tol
+            # # Calculate tolerance, f is never evaluated at 2 points closer than tol
             # tol = epsi*fabs(x) + t
-            tol = 0.5
-            # Twice the tolerance
-            t2 = 2.*tol
+            # # Twice the tolerance
+            # t2 = 2.*tol
+
             # Check the stopping criterion
             # When x is close enough to the middle point between sa and sb
             if fabs(x - m) <= t2 - 0.5*(sb - sa):
                 break
 
             # Fit a parabola
-            # TODO: what are p, q, r
             r = 0.
             q = r
             p = q
@@ -809,8 +815,25 @@ cdef class BestSplitter(BaseDenseSplitter):
                         brent_start, brent_end = p + min_samples_leaf, end - min_samples_leaf
                         # Reject if min_samples_leaf is not guaranteed
                         if brent_start <= brent_end:
-                            # Brent optimization to find best split and corresponding pseudo impurity improvement
-                            brent_results = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
+                            # If only 1 split possible, e.g. 0, 1, | 2, 3, min_samples_split = 2,
+                            # then bypass brent optimization and calculate impurity improvement
+                            # for [start, current.pos) and [current.pos, end)
+                            if brent_start == brent_end:
+                                current.pos = brent_start
+                                brent_results.x = <double> current.pos
+                                # Equivalent to current_proxy_improvement.
+                                # As long as it > 0, it is an improvement and the split should be done
+                                brent_results.fx = self.criterion.proxy_impurity_improvement_pipeline(
+                                        brent_results.x,
+                                        min_samples_leaf,
+                                        min_weight_leaf,
+                                        self.alpha_g_split)
+                                # If impurity improvement is non-positive, the split is bad, reset it to worst
+                                if brent_results.fx <= 0.: brent_results.fx = -INFINITY
+                            else:
+                                # Brent optimization to find best split and corresponding pseudo impurity improvement
+                                brent_results = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
+
                             # Current proxy improvement is this current feature
                             # and is not necessarily the best among all features
                             current_proxy_improvement = brent_results.fx
@@ -869,7 +892,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                             #                 self.y[iunsorted, ibasis] = g_r[ibasis]
 
 
-                    # Else if split_finder is "brute" or "1000"
+                    # Else if split_finder is "brute" or "1000" or "auto" (but <= 1000 samples at this node)
                     else:
                         while p < end:
                             # Skip constant feature values
@@ -918,6 +941,10 @@ cdef class BestSplitter(BaseDenseSplitter):
                                         min_samples_leaf,
                                         min_weight_leaf,
                                         self.alpha_g_split)
+                                # If only 1 split possible, e.g. 0, 1, | 2, 3, min_samples_leaf = 2,
+                                # then if impurity improvement <= 0, reject split
+                                if start + min_samples_leaf == end - min_samples_leaf:
+                                    if current_proxy_improvement <= 0.: current_proxy_improvement = -INFINITY
 
                                 if current_proxy_improvement > best_proxy_improvement:
                                     best_proxy_improvement = current_proxy_improvement

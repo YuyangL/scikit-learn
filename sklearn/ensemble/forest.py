@@ -92,8 +92,12 @@ def _generate_unsampled_indices(random_state, n_samples):
 
 
 def _parallel_build_trees(tree, forest, X, y, sample_weight, tree_idx, n_trees,
-                          verbose=0, class_weight=None):
-    """Private function used to fit a single tree in parallel."""
+                          verbose=0, class_weight=None,
+                          # Extra tensor basis kwarg
+                          tb=None):
+    """Private function used to fit a single tree in parallel.
+    If tensor basis tb of shape (n_samples, n_outputs, n_basis) is provided,
+    tensor basis MSE criterion is enabled."""
     if verbose > 1:
         print("building tree %d of %d" % (tree_idx + 1, n_trees))
 
@@ -115,9 +119,13 @@ def _parallel_build_trees(tree, forest, X, y, sample_weight, tree_idx, n_trees,
         elif class_weight == 'balanced_subsample':
             curr_sample_weight *= compute_sample_weight('balanced', y, indices)
 
-        tree.fit(X, y, sample_weight=curr_sample_weight, check_input=False)
+        tree.fit(X, y, sample_weight=curr_sample_weight, check_input=False,
+                 # Extra kwarg
+                 tb=tb)
     else:
-        tree.fit(X, y, sample_weight=sample_weight, check_input=False)
+        tree.fit(X, y, sample_weight=sample_weight, check_input=False,
+                 # Extra kwarg
+                 tb=tb)
 
     return tree
 
@@ -214,8 +222,12 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
 
         return sparse_hstack(indicators).tocsr(), n_nodes_ptr
 
-    def fit(self, X, y, tb=None, sample_weight=None):
+    def fit(self, X, y, sample_weight=None,
+            # Extra tensor basis kwarg for tensor basis MSE criterion
+            tb=None):
         """Build a forest of trees from the training set (X, y).
+        If tensor basis tb of shape (n_samples, n_outputs, n_basis) is provided,
+        tensor basis MSE criterion is enabled.
 
         Parameters
         ----------
@@ -252,7 +264,8 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         X = check_array(X, accept_sparse="csc", dtype=DTYPE)
         y = check_array(y, accept_sparse='csc', ensure_2d=False, dtype=None)
         # If tb is provided, check tb like the check of y
-        if tb is not None: tb = check_array(tb, ensure_2d=False, dtype=None)
+        if tb is not None: tb = check_array(tb,
+                                            accept_sparse='csc', ensure_2d=False, dtype=None)
         if sample_weight is not None:
             sample_weight = check_array(sample_weight, ensure_2d=False)
         if issparse(X):
@@ -336,7 +349,9 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
                              **_joblib_parallel_args(prefer='threads'))(
                 delayed(_parallel_build_trees)(
                     t, self, X, y, sample_weight, i, len(trees),
-                    verbose=self.verbose, class_weight=self.class_weight)
+                    verbose=self.verbose, class_weight=self.class_weight,
+                    # Extra kwarg
+                    tb=tb)
                 for i, t in enumerate(trees))
 
             # Collect newly grown trees
@@ -353,7 +368,9 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         return self
 
     @abstractmethod
-    def _set_oob_score(self, X, y):
+    def _set_oob_score(self, X, y,
+                       # Extra kwarg for tensor basis MSE criterion
+                       tb=None):
         """Calculate out of bag predictions and score."""
 
     def _validate_y_class_weight(self, y):
@@ -395,14 +412,22 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         return all_importances / np.sum(all_importances)
 
 
-def _accumulate_prediction(predict, X, out, lock):
+def _accumulate_prediction(predict, X, out, lock,
+                           # Extra tensor basis kwarg
+                           tb=None):
     """This is a utility function for joblib's Parallel.
+
+    If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
+    then anisotropy tensor bij of shape (n_samples, n_outputs) will be predicted.
 
     It can't go locally in ForestClassifier or ForestRegressor, because joblib
     complains that it cannot pickle it when placed there.
     """
-    prediction = predict(X, check_input=False)
+    prediction = predict(X, check_input=False,
+                         # Extra kwarg
+                         tb=tb)
     with lock:
+        # TODO: consider post-proc of prediction e.g. filter bad prediction
         if len(out) == 1:
             out[0] += prediction
         else:
@@ -441,7 +466,9 @@ class ForestClassifier(BaseForest, ClassifierMixin, metaclass=ABCMeta):
             warm_start=warm_start,
             class_weight=class_weight)
 
-    def _set_oob_score(self, X, y):
+    def _set_oob_score(self, X, y,
+                       # Ignoring tb input
+                       **kwarg):
         """Compute out-of-bag score"""
         X = check_array(X, dtype=DTYPE, accept_sparse='csr')
 
@@ -680,11 +707,16 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             verbose=verbose,
             warm_start=warm_start)
 
-    def predict(self, X):
+    def predict(self, X,
+                # Extra tensor basis input if predicting bij
+                tb=None):
         """Predict regression target for X.
 
         The predicted regression target of an input sample is computed as the
         mean predicted regression targets of the trees in the forest.
+
+        If tensor basis tb of shape (n_samples, n_outputs, n_basis) is provided,
+        anisotropy tensor bij of shape (n_samples, n_outputs) will be predicted.
 
         Parameters
         ----------
@@ -693,10 +725,14 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             ``dtype=np.float32``. If a sparse matrix is provided, it will be
             converted into a sparse ``csr_matrix``.
 
+        tb : array-like of shape = (n_samples, n_outputs, n_bases), or None, optional (default=None)
+            The input tensor basis. If provided, then anisotropy tensor bij will be predicted.
+
         Returns
         -------
         y : array of shape = [n_samples] or [n_samples, n_outputs]
             The predicted values.
+            If tb is not None, then y is anisotropy tensor bij.
         """
         check_is_fitted(self, 'estimators_')
         # Check data
@@ -715,15 +751,22 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
         lock = threading.Lock()
         Parallel(n_jobs=n_jobs, verbose=self.verbose,
                  **_joblib_parallel_args(require="sharedmem"))(
-            delayed(_accumulate_prediction)(e.predict, X, [y_hat], lock)
+            delayed(_accumulate_prediction)(e.predict, X, [y_hat], lock,
+                                            # Extra kwarg
+                                            tb=tb)
             for e in self.estimators_)
 
         y_hat /= len(self.estimators_)
 
         return y_hat
 
-    def _set_oob_score(self, X, y):
-        """Compute out-of-bag scores"""
+    def _set_oob_score(self, X, y,
+                       # Extra tensor basis kwarg to score on bij
+                       tb=None):
+        """Compute out-of-bag scores.
+        If tensor basis bij of shape (n_samples, n_outputs, n_bases) is provided,
+        then scoring is on anisotropy tensor bij which is necessary for
+        tensor basis MSE criterion."""
         X = check_array(X, dtype=DTYPE, accept_sparse='csr')
 
         n_samples = y.shape[0]
@@ -734,8 +777,16 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
         for estimator in self.estimators_:
             unsampled_indices = _generate_unsampled_indices(
                 estimator.random_state, n_samples)
-            p_estimator = estimator.predict(
-                X[unsampled_indices, :], check_input=False)
+            # If tb is provided, use fancy slicing like X
+            if tb is not None:
+                p_estimator = estimator.predict(
+                    X[unsampled_indices, :], check_input=False,
+                # Extra kwarg
+                tb=tb[unsampled_indices])
+            # Else if tb is None, use default predict()
+            else:
+                p_estimator = estimator.predict(
+                        X[unsampled_indices, :], check_input=False)
 
             if self.n_outputs_ == 1:
                 p_estimator = p_estimator[:, np.newaxis]
@@ -1284,7 +1335,19 @@ class RandomForestRegressor(ForestRegressor):
                  n_jobs=None,
                  random_state=None,
                  verbose=0,
-                 warm_start=False):
+                 warm_start=False,
+                 # Verbose tensor basis related information for debugging
+                 tb_verbose=False,
+                 # Provide scheme of finding the best split amongst samples
+                 split_finder="brute",
+                 # Verbose in BestSplitter.node_split()
+                 split_verbose=False,
+                 # L2 regularization fraction to penalize large g during LS fit
+                 alpha_g_fit=0.,
+                 # L2 regularization coefficient to penalize large g during split finder
+                 alpha_g_split=0.,
+                 # Cap of g magnitude during LS fit
+                 g_cap=None):
         super().__init__(
             base_estimator=DecisionTreeRegressor(),
             n_estimators=n_estimators,
@@ -1292,7 +1355,14 @@ class RandomForestRegressor(ForestRegressor):
                               "min_samples_leaf", "min_weight_fraction_leaf",
                               "max_features", "max_leaf_nodes",
                               "min_impurity_decrease", "min_impurity_split",
-                              "random_state"),
+                              "random_state",
+                              # Extra params
+                              "tb_verbose",
+                              "split_finder",
+                              "split_verbose",
+                              "alpha_g_fit",
+                              "alpha_g_split",
+                              "g_cap"),
             bootstrap=bootstrap,
             oob_score=oob_score,
             n_jobs=n_jobs,
@@ -1309,6 +1379,13 @@ class RandomForestRegressor(ForestRegressor):
         self.max_leaf_nodes = max_leaf_nodes
         self.min_impurity_decrease = min_impurity_decrease
         self.min_impurity_split = min_impurity_split
+        # Extra initializations
+        self.tb_verbose = tb_verbose
+        self.split_finder = split_finder
+        self.split_verbose = split_verbose
+        self.alpha_g_fit = alpha_g_fit
+        self.alpha_g_split = alpha_g_split
+        self.g_cap = g_cap
 
 
 class ExtraTreesClassifier(ForestClassifier):
@@ -1963,10 +2040,14 @@ class RandomTreesEmbedding(BaseForest):
         self.min_impurity_split = min_impurity_split
         self.sparse_output = sparse_output
 
-    def _set_oob_score(self, X, y):
+    def _set_oob_score(self, X, y,
+                       # Ignoring tb input
+                       **kwarg):
         raise NotImplementedError("OOB score not supported by tree embedding")
 
-    def fit(self, X, y=None, sample_weight=None):
+    def fit(self, X, y=None, sample_weight=None,
+            # Ignoring tb input
+            **kwarg):
         """Fit estimator.
 
         Parameters

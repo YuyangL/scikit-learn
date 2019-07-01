@@ -194,7 +194,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                     self.class_weight, y_original)
 
         else:
-            self.classes_ = [None] * self.n_outputs_
+            self.classes_ = [None] * self.n_outputs_ if tb is None else [None]*10
             # In tensor basis criterion, make sure n_classes has size 10 instead of 6/9 of bij.
             # This ensures max_n_classes is always 1 for tensor basis criterion
             self.n_classes_ = [1] * self.n_outputs_ if tb is None else [1]*10
