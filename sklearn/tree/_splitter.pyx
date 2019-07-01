@@ -819,7 +819,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                             # then bypass brent optimization and calculate impurity improvement
                             # for [start, current.pos) and [current.pos, end)
                             if brent_start == brent_end:
-                                current.pos = brent_start
+                                current.pos = <SIZE_t> brent_start
                                 brent_results.x = <double> current.pos
                                 # Equivalent to current_proxy_improvement.
                                 # As long as it > 0, it is an improvement and the split should be done
