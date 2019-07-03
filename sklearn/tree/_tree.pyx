@@ -680,7 +680,7 @@ cdef class Tree:
     def __cinit__(self, int n_features, np.ndarray[SIZE_t, ndim=1] n_classes,
                   int n_outputs,
                   # Extra kwarg to iterate predicted bij until realizable
-                  int realize_iter=None):
+                  int realize_iter=-1):
         """Constructor."""
         # Input/Output layout
         self.n_features = n_features
