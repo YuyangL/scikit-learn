@@ -620,7 +620,7 @@ def _score(estimator, X_test, y_test, scorer, is_multimetric=False,
         else:
             # Extra arg of tb_test to feed estimator.score().
             # Here essentially _passthrough_scorer() from scorer.py is done
-            score = scorer(estimator, X_test, y_test, tb_test)
+            score = scorer(estimator, X_test, y_test, tb=tb_test)
 
         if hasattr(score, 'item'):
             try:
@@ -649,7 +649,7 @@ def _multimetric_score(estimator, X_test, y_test, scorers,
         else:
             # Additional arg of tb_test to feed estimator.score().
             # Here essentially _passthrough_scorer() from scorer.py is done
-            score = scorer(estimator, X_test, y_test, tb_test)
+            score = scorer(estimator, X_test, y_test, tb=tb_test)
 
         if hasattr(score, 'item'):
             try:

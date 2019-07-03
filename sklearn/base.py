@@ -363,9 +363,10 @@ class RegressorMixin:
     """Mixin class for all regression estimators in scikit-learn."""
     _estimator_type = "regressor"
 
-    def score(self, X, y,
+    def score(self, X, y, sample_weight=None,
               # Extra kwarg of tensor basis tb to predict anisotropy tensor bij (y)
-              tb=None, sample_weight=None):
+              tb=None,
+              realize_iter=None):
         """Returns the coefficient of determination R^2 of the prediction.
 
         The coefficient R^2 is defined as (1 - u/v), where u is the residual
@@ -417,7 +418,7 @@ class RegressorMixin:
         from .metrics import r2_score
         from .metrics.regression import _check_reg_targets
         # For models other than TBDT or TBRF, predict() doesn't accept extra arg of tb
-        y_pred = self.predict(X, tb) if tb is not None else self.predict(X)
+        y_pred = self.predict(X, tb=tb, realize_iter=realize_iter) if tb is not None else self.predict(X)
         # XXX: Remove the check in 0.23
         y_type, _, _, _ = _check_reg_targets(y, y_pred, None)
         if y_type == 'continuous-multioutput':

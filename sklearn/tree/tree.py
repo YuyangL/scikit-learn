@@ -104,7 +104,9 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                  # L2 regularization coefficient to penalize large g during split finder
                  alpha_g_split=0.,
                  # Cap of g magnitude during LS fit
-                 g_cap=None):
+                 g_cap=None,
+                 # Realizability iterator on bij predictions
+                 realize_iter=0):
         self.criterion = criterion
         self.splitter = splitter
         self.max_depth = max_depth
@@ -122,6 +124,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         self.tb_verbose, self.split_finder, self.split_verbose = tb_verbose, split_finder, split_verbose
         self.alpha_g_fit, self.alpha_g_split = alpha_g_fit, alpha_g_split
         self.g_cap = g_cap
+        self.realize_iter = realize_iter
 
     def get_depth(self):
         """Returns the depth of the decision tree.
@@ -228,7 +231,12 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         if tb is not None:
             tb = __ensureContiguousDOUBLE(tb)
             self.tb_mode = True
-            print('\nFitting DBRT using tensor basis MSE criterion... ')
+            print('\nFitting DBRT using tensor basis MSE criterion,'
+                  '\n {0} split finder, alpha_g_fit = {1}, alpha_g_split = {2}, g_cap = {3}... '.format(
+                    self.split_finder,
+                                                                                              self.alpha_g_fit,
+                                                                                              self.alpha_g_split,
+                                                                                              self.g_cap))
         else:
             self.tb_mode = False
 
@@ -444,7 +452,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         if not self.tb_mode:
             self.tree_ = Tree(self.n_features_, self.n_classes_, self.n_outputs_)
         else:
-            self.tree_ = Tree(self.n_features_, self.n_classes_, 10)
+            # Also extra arg of realize_iter
+            self.tree_ = Tree(self.n_features_, self.n_classes_, 10, self.realize_iter)
 
         # Use BestFirst if max_leaf_nodes given; use DepthFirst otherwise
         if max_leaf_nodes < 0:
@@ -490,10 +499,11 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         return X
 
-    def predict(self, X,
+    def predict(self, X, check_input=True,
                 # Extra kwarg of tb for predicting bij
                 tb=None,
-                check_input=True):
+                # Make bij predictions realizable
+                realize_iter=None):
         """Predict class or regression value for X.
 
         For a classification model, the predicted class for each sample in X is
@@ -527,12 +537,12 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         """
         check_is_fitted(self, 'tree_')
         X = self._validate_X_predict(X, check_input)
-        # Extra arg of tb.
+        # Extra kwargs of tb and realize_iter
         # If tb is provided, then the prediction is assumed
         # bij = sum^n_bases(Tij*g),
         # where optimal g has been saved at each tree node.
         # proba is then shape (n_samples, n_outputs, 1)
-        proba = self.tree_.predict(X, tb)
+        proba = self.tree_.predict(X, tb=tb, realize_iter=realize_iter)
         n_samples = X.shape[0]
 
         # Classification

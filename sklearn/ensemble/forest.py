@@ -148,7 +148,9 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
                  random_state=None,
                  verbose=0,
                  warm_start=False,
-                 class_weight=None):
+                 class_weight=None,
+                 # Extra kwarg to do median prediction instead of mean of all estimators
+                 median_predict=False):
         super().__init__(
             base_estimator=base_estimator,
             n_estimators=n_estimators,
@@ -161,6 +163,8 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         self.verbose = verbose
         self.warm_start = warm_start
         self.class_weight = class_weight
+        # Extra initialization
+        self.median_predict = median_predict
 
     def apply(self, X):
         """Apply trees in the forest to X, return leaf indices.
@@ -263,9 +267,9 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         # Validate or convert input data
         X = check_array(X, accept_sparse="csc", dtype=DTYPE)
         y = check_array(y, accept_sparse='csc', ensure_2d=False, dtype=None)
-        # If tb is provided, check tb like the check of y
-        if tb is not None: tb = check_array(tb,
-                                            accept_sparse='csc', ensure_2d=False, dtype=None)
+        # # If tb is provided, check tb like the check of y
+        # if tb is not None: tb = check_array(tb,
+        #                                     accept_sparse='csc', ensure_2d=False, dtype=None)
         if sample_weight is not None:
             sample_weight = check_array(sample_weight, ensure_2d=False)
         if issparse(X):
@@ -358,7 +362,9 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
             self.estimators_.extend(trees)
 
         if self.oob_score:
-            self._set_oob_score(X, y)
+            self._set_oob_score(X, y,
+                                # Extra kwarg
+                                tb=tb)
 
         # Decapsulate classes_ attributes
         if hasattr(self, "classes_") and self.n_outputs_ == 1:
@@ -371,7 +377,10 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
     def _set_oob_score(self, X, y,
                        # Extra kwarg for tensor basis MSE criterion
                        tb=None):
-        """Calculate out of bag predictions and score."""
+        """Calculate out of bag predictions and score.
+        If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
+        then scoring is based on predicted bij,
+        which is necessary for tensor basis MSE criterion."""
 
     def _validate_y_class_weight(self, y):
         # Default implementation
@@ -695,7 +704,9 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
                  n_jobs=None,
                  random_state=None,
                  verbose=0,
-                 warm_start=False):
+                 warm_start=False,
+                 # Extra kwarg to do median prediction instead of mean prediction
+                 median_predict=False):
         super().__init__(
             base_estimator,
             n_estimators=n_estimators,
@@ -705,11 +716,13 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             n_jobs=n_jobs,
             random_state=random_state,
             verbose=verbose,
-            warm_start=warm_start)
+            warm_start=warm_start,
+            median_predict=median_predict)
 
     def predict(self, X,
                 # Extra tensor basis input if predicting bij
-                tb=None):
+                tb=None,
+                realize_iter=None):
         """Predict regression target for X.
 
         The predicted regression target of an input sample is computed as the
@@ -753,7 +766,7 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
                  **_joblib_parallel_args(require="sharedmem"))(
             delayed(_accumulate_prediction)(e.predict, X, [y_hat], lock,
                                             # Extra kwarg
-                                            tb=tb)
+                                            tb=tb, realize_iter=realize_iter)
             for e in self.estimators_)
 
         y_hat /= len(self.estimators_)
@@ -771,8 +784,18 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
 
         n_samples = y.shape[0]
 
-        predictions = np.zeros((n_samples, self.n_outputs_))
+        # Median prediction option instead of mean
+        if self.median_predict:
+            # predictions is 3D, last D is each p_estimator
+            predictions = np.empty((n_samples, self.n_outputs_, len(self.estimators_)))
+        # Else if calculating mean prediction
+        else:
+            # predictions is 2D since it's summing up p_estimator
+            predictions = np.zeros((n_samples, self.n_outputs_))
+
         n_predictions = np.zeros((n_samples, self.n_outputs_))
+        # Counter for the estimator index in case of self.median_predict is True
+        iestimator = 0
 
         for estimator in self.estimators_:
             unsampled_indices = _generate_unsampled_indices(
@@ -791,7 +814,15 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             if self.n_outputs_ == 1:
                 p_estimator = p_estimator[:, np.newaxis]
 
-            predictions[unsampled_indices, :] += p_estimator
+            # Median prediction, no aggregation but append
+            if self.median_predict:
+                # Append p_estimator (2D) along 3rd D
+                predictions[unsampled_indices, :, iestimator] = p_estimator
+                iestimator += 1
+            # Else if calculating mean, simply sum them up
+            else:
+                predictions[unsampled_indices, :] += p_estimator
+
             n_predictions[unsampled_indices, :] += 1
 
         if (n_predictions == 0).any():
@@ -800,7 +831,13 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
                  "to compute any reliable oob estimates.")
             n_predictions[n_predictions == 0] = 1
 
-        predictions /= n_predictions
+        # Take the median of every sample and every output along 3rd axis, i.e. estimator axis
+        if self.median_predict:
+            # Here predictions should be shrinked from 3D to 2D since 3rd D of estimator is gone
+            predictions = np.median(predictions, axis=2, overwrite_input=True)
+        else:
+            predictions /= n_predictions
+
         self.oob_prediction_ = predictions
 
         if self.n_outputs_ == 1:
@@ -1347,7 +1384,11 @@ class RandomForestRegressor(ForestRegressor):
                  # L2 regularization coefficient to penalize large g during split finder
                  alpha_g_split=0.,
                  # Cap of g magnitude during LS fit
-                 g_cap=None):
+                 g_cap=None,
+                 # Realizability iterator on bij prediction
+                 realize_iter=0,
+                 # Whether do median prediction or mean prediction
+                 median_predict=False):
         super().__init__(
             base_estimator=DecisionTreeRegressor(),
             n_estimators=n_estimators,
@@ -1362,13 +1403,15 @@ class RandomForestRegressor(ForestRegressor):
                               "split_verbose",
                               "alpha_g_fit",
                               "alpha_g_split",
-                              "g_cap"),
+                              "g_cap",
+                              "realize_iter"),
             bootstrap=bootstrap,
             oob_score=oob_score,
             n_jobs=n_jobs,
             random_state=random_state,
             verbose=verbose,
-            warm_start=warm_start)
+            warm_start=warm_start,
+            median_predict=median_predict)
 
         self.criterion = criterion
         self.max_depth = max_depth
@@ -1386,6 +1429,7 @@ class RandomForestRegressor(ForestRegressor):
         self.alpha_g_fit = alpha_g_fit
         self.alpha_g_split = alpha_g_split
         self.g_cap = g_cap
+        self.realize_iter = realize_iter
 
 
 class ExtraTreesClassifier(ForestClassifier):

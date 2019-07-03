@@ -53,6 +53,8 @@ cdef class Tree:
     cdef Node* nodes                     # Array of nodes
     cdef double* value                   # (capacity, n_outputs, max_n_classes) array of values
     cdef SIZE_t value_stride             # = n_outputs * max_n_classes
+    # Extra declaration of realizibility iterator for bij prediction
+    cdef public int realize_iter
 
     # Methods
     cdef SIZE_t _add_node(self, SIZE_t parent, bint is_left, bint is_leaf,
@@ -67,7 +69,11 @@ cdef class Tree:
 
     # In tensor basis mode, if tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
     # then the prediction is bij = sum^n_bases(Tij*g)
-    cpdef np.ndarray predict(self, object X, np.ndarray tb=*)
+    # realize_iter can be an extra kwarg
+    # to control whether and how many iteration for bij realizability
+    cpdef np.ndarray predict(self, object X, np.ndarray tb=*, int realize_iter=*)
+    # Extra method to make bij realizable during prediction in tensor basis MSE criterion
+    cdef np.ndarray _makeRealizable(self, np.ndarray labels)
 
     cpdef np.ndarray apply(self, object X)
     cdef np.ndarray _apply_dense(self, object X)

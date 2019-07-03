@@ -678,17 +678,21 @@ cdef class Tree:
             return self._get_value_ndarray()[:self.node_count]
 
     def __cinit__(self, int n_features, np.ndarray[SIZE_t, ndim=1] n_classes,
-                  int n_outputs):
+                  int n_outputs,
+                  # Extra kwarg to iterate predicted bij until realizable
+                  int realize_iter=None):
         """Constructor."""
         # Input/Output layout
         self.n_features = n_features
         self.n_outputs = n_outputs
         self.n_classes = NULL
         safe_realloc(&self.n_classes, n_outputs)
+        # Extra assignment of realize_iter
+        self.realize_iter = realize_iter
 
         self.max_n_classes = np.max(n_classes)
-        print('\nn_classes is {0} in Tree.__cinit__() '.format(n_classes))
-        print('\nmax_n_classes is {} in Tree.__cinit__() '.format(self.max_n_classes))
+        # print('\nn_classes is {0} in Tree.__cinit__() '.format(n_classes))
+        # print('\nmax_n_classes is {} in Tree.__cinit__() '.format(self.max_n_classes))
         self.value_stride = n_outputs * self.max_n_classes
 
         cdef SIZE_t k
@@ -711,10 +715,12 @@ cdef class Tree:
 
     def __reduce__(self):
         """Reduce re-implementation, for pickling."""
-        print('\nn_outputs = {} during Tree.__reduce__() for pickling '.format(self.n_outputs))
+        # print('\nn_outputs = {} during Tree.__reduce__() for pickling '.format(self.n_outputs))
         return (Tree, (self.n_features,
                        sizet_ptr_to_ndarray(self.n_classes, self.n_outputs),
-                       self.n_outputs), self.__getstate__())
+                       self.n_outputs,
+                       # Extra arg
+                       self.realize_iter), self.__getstate__())
 
     def __getstate__(self):
         """Getstate re-implementation, for pickling."""
@@ -724,7 +730,7 @@ cdef class Tree:
         d["node_count"] = self.node_count
         d["nodes"] = self._get_node_ndarray()
         d["values"] = self._get_value_ndarray()
-        print('\nvalues shape = {} during Tree.__getstate__() for pickling '.format(d["values"].shape))
+        # print('\nvalues shape = {} during Tree.__getstate__() for pickling '.format(d["values"].shape))
         return d
 
     def __setstate__(self, d):
@@ -857,8 +863,9 @@ cdef class Tree:
 
         return node_id
 
-    # Extra kwarg of tb
-    cpdef np.ndarray predict(self, object X, np.ndarray tb=None):
+    cpdef np.ndarray predict(self, object X,
+                             # Extra kwargs
+                             np.ndarray tb=None, int realize_iter=None):
         """Predict target for X.
         In tensor basis criterion, the predictions out is holding predicted 10 optimal g.
         Therefore, if tensor basis tb of shape (n_samples, n_outputs, n_bases) is supplied, 
@@ -878,8 +885,11 @@ cdef class Tree:
         # do the same for bij, with max_n_classes = 1
         cdef np.ndarray[DOUBLE_t, ndim=3] bij
         cdef SIZE_t i, j
+        # Giving rise to the possibility of realize_iter kwarg to overwrite self.realize_iter
+        cdef SIZE_t realize_iter_final = realize_iter if realize_iter != None else self.realize_iter
         if tb is not None:
-            print("\nTensor basis is provided, the predictions are bij. ")
+            print("\nTensor basis is provided, the predictions are bij with {} realizability iterations. ".format(
+                    realize_iter_final))
             # Note bij can have 6 outputs due to tensor symmetry
             bij = np.empty((X.shape[0], tb.shape[1], self.max_n_classes))
             # Go through each sample then each output
@@ -888,10 +898,110 @@ cdef class Tree:
                     # max_n_classes in 3rd D is 1 and is useless
                     bij[i, j, 0] = np.dot(tb[i, j], out[i, :, 0])
 
+            # Iterate to shift unrealizable bij to realizable
+            for i in range(realize_iter_final):
+                bij[..., 0] = self._makeRealizable(bij[..., 0])
+
             return bij
         else:
 
             return out
+
+    cdef np.ndarray _makeRealizable(self, np.ndarray labels):
+        """
+        From Ling et al. (2016), see https://github.com/tbnn/tbnn.
+        
+        This function is specific to turbulence modeling.
+        Given the anisotropy tensor, this function forces realizability
+        by shifting values within acceptable ranges for Aii > -1/3 and 2|Aij| < Aii + Ajj + 2/3
+        Then, if eigenvalues negative, shifts them to zero. Noteworthy that this step can undo
+        constraints from first step, so this function should be called iteratively to get convergence
+        to a realizable state.
+    
+        :param labels: The predicted anisotropy tensor.
+        :type labels: np.ndarray[n_points, 9]
+    
+        :return: The predicted realizable anisotropy tensor.
+        :type: np.ndarray[n_points, 9]
+        """
+        cdef unsigned int n_points, n_outputs, i, j
+        cdef np.ndarray[np.float_t, ndim=2] A, evectors
+        cdef np.ndarray[np.float_t] evalues
+        cdef unsigned int b12, b13, b21, b23, b31, b32
+        # Tuple is hard to use
+        cdef list bii
+
+        n_points = labels.shape[0]
+        n_outputs = labels.shape[1]
+        if n_outputs == 9:
+            bii = [0, 4, 8]
+            b12, b13 = 1, 2
+            b21, b23 = 3, 5
+            b31, b32 = 6, 7
+        else:
+            bii = [0, 3, 5]
+            b12, b13 = 1, 2
+            b21, b23 = 1, 4
+            b31, b32 = 2, 4
+
+        A = np.empty((3, 3))
+        for i in range(n_points):
+            # Scales all on-diags to retain zero trace
+            if np.min(labels[i, bii]) < -1./3.:
+                labels[i, bii] *= -1./(3.*np.min(labels[i, bii]))
+
+            if 2.*np.abs(labels[i, b12]) > labels[i, 0] + labels[i, bii[1]] + 2./3.:
+                labels[i, b12] = (labels[i, 0] + labels[i, bii[1]] + 2./3.)*.5*np.sign(labels[i, b12])
+                # labels[i, 3] = (labels[i, 0] + labels[i, 4] + 2./3.)*.5*np.sign(labels[i, 1])
+                labels[i, b21] = labels[i, b12]
+
+            if 2.*np.abs(labels[i, b23]) > labels[i, bii[1]] + labels[i, bii[2]] + 2./3.:
+                labels[i, b23] = (labels[i, bii[1]] + labels[i, bii[2]] + 2./3.)*.5*np.sign(labels[i, b23])
+                # labels[i, 7] = (labels[i, 4] + labels[i, 8] + 2./3.)*.5*np.sign(labels[i, 5])
+                labels[i, b32] = labels[i, b23]
+
+            if 2.*np.abs(labels[i, b13]) > labels[i, 0] + labels[i, bii[2]] + 2./3.:
+                labels[i, b13] = (labels[i, 0] + labels[i, bii[2]] + 2./3.)*.5*np.sign(labels[i, b13])
+                # labels[i, 6] = (labels[i, 0] + labels[i, 8] + 2./3.)*.5*np.sign(labels[i, 2])
+                labels[i, b31] = labels[i, b13]
+
+            # Enforce positive semidefinite by pushing evalues to non-negative
+            A[0, 0] = labels[i, 0]
+            A[1, 1] = labels[i, bii[1]]
+            A[2, 2] = labels[i, bii[2]]
+            A[0, 1] = labels[i, b12]
+            A[1, 0] = labels[i, b21]
+            A[1, 2] = labels[i, b23]
+            A[2, 1] = labels[i, b32]
+            A[0, 2] = labels[i, b13]
+            A[2, 0] = labels[i, b31]
+            evalues, evectors = np.linalg.eig(A)
+            if np.max(evalues) < (3.*np.abs(np.sort(evalues)[1]) - np.sort(evalues)[1])/2.:
+                evalues = evalues*(3.*np.abs(np.sort(evalues)[1]) - np.sort(evalues)[1])/(2.*np.max(evalues))
+                A = np.dot(np.dot(evectors, np.diag(evalues)), np.linalg.inv(evectors))
+                for j in range(3):
+                    labels[i, bii[j]] = A[j, j]
+
+                labels[i, 1] = A[0, 1]
+                labels[i, 5] = A[1, 2]
+                labels[i, 2] = A[0, 2]
+                labels[i, 3] = A[0, 1]
+                labels[i, 7] = A[1, 2]
+                labels[i, 6] = A[0, 2]
+            if np.max(evalues) > 1./3. - np.sort(evalues)[1]:
+                evalues = evalues*(1./3. - np.sort(evalues)[1])/np.max(evalues)
+                A = np.dot(np.dot(evectors, np.diag(evalues)), np.linalg.inv(evectors))
+                for j in range(3):
+                    labels[i, bii[j]] = A[j, j]
+
+                labels[i, 1] = A[0, 1]
+                labels[i, 5] = A[1, 2]
+                labels[i, 2] = A[0, 2]
+                labels[i, 3] = A[0, 1]
+                labels[i, 7] = A[1, 2]
+                labels[i, 6] = A[0, 2]
+
+        return labels
 
     cpdef np.ndarray apply(self, object X):
         """Finds the terminal region (=leaf node) for each sample in X.

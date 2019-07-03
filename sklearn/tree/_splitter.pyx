@@ -420,8 +420,8 @@ cdef class BaseDenseSplitter(Splitter):
         # Twice the tolerance
         cdef double t2 = 2.*tol
         # Make sure impurity improvement can be evaluated at a and b border
-        a -= tol
-        b -= tol
+        a -= 0.3
+        b += 0.3
         # v = w = x = a + (3 - sqrt(5))/2*(b - a) = a + 0.381966(b - a)
         cdef double c = 0.5*(3. - sqrt(5.))
         # Lower and upper bound of x
@@ -638,7 +638,8 @@ cdef class BestSplitter(BaseDenseSplitter):
         # SplitRecord struct contains feature, pos, threshold, improvement, impurity_left/right
         cdef SplitRecord best, current
         cdef double current_proxy_improvement = -INFINITY
-        cdef double best_proxy_improvement = -INFINITY
+        # Reject negative proxy improvement so that there'll be no node having predictions worse than 0 prediction
+        cdef double best_proxy_improvement = 0.  # -INFINITY
         # Define a BrentResults struct to catch multiple returns of _brentSplitFinder()
         cdef BrentResults brent_results
 
@@ -665,9 +666,9 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t partition_end
         cdef double best_pos, pos_double
         cdef double brent_start, brent_end
-        # (Unused) Brent optimization absolute and relative tolerance
-        cdef double xtol = 1e-8
-        cdef double rtol = 1e-7
+        # # (Unused) Brent optimization absolute and relative tolerance
+        # cdef double xtol = 1e-8
+        # cdef double rtol = 1e-7
         # If using "1000" split_scheme, pstep is capped to 1000.
         # Else if using "auto" split_scheme, pstep is 1 when n_samples <= 1000
         cdef SIZE_t pstep = <SIZE_t> max(1, nearbyint((end - start)/1000.)) if self.split_finder_code == 1000 else 1
@@ -832,7 +833,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                                 if brent_results.fx <= 0.: brent_results.fx = -INFINITY
                             else:
                                 # Brent optimization to find best split and corresponding pseudo impurity improvement
-                                brent_results = self._brentSplitFinder(brent_start, brent_end, rtol, xtol)
+                                brent_results = self._brentSplitFinder(brent_start, brent_end)
 
                             # Current proxy improvement is this current feature
                             # and is not necessarily the best among all features
