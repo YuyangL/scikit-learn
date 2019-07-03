@@ -420,8 +420,8 @@ cdef class BaseDenseSplitter(Splitter):
         # Twice the tolerance
         cdef double t2 = 2.*tol
         # Make sure impurity improvement can be evaluated at a and b border
-        a -= 0.3
-        b += 0.3
+        a -= tol
+        b += tol
         # v = w = x = a + (3 - sqrt(5))/2*(b - a) = a + 0.381966(b - a)
         cdef double c = 0.5*(3. - sqrt(5.))
         # Lower and upper bound of x

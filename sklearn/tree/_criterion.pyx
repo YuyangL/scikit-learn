@@ -894,7 +894,8 @@ cdef class RegressionCriterion(Criterion):
                 printf("\n   Array memory blocks are destroyed ")
 
     def __reduce__(self):
-        # For pickling. Addition args of tb_mode, tb_verbose
+        # For pickling. Addition args of tb_mode, tb_verbose,
+        # alpha_g_fit, g_cap
         return (type(self), (self.n_outputs, self.n_samples, self.tb_mode, self.tb_verbose, self.alpha_g_fit,
                              self.g_cap),
                 self.__getstate__())
@@ -956,8 +957,8 @@ cdef class RegressionCriterion(Criterion):
             # Original unsorted sample index at this node, for sorted sample index in [start, end)
             i = samples[p]
 
-            # Doesn't make sense for tensor basis mode to have custom weights at this moment
-            if not self.tb_mode and sample_weight != NULL:
+            # Sample weights are 0 for unsampled points in RF bootstrap
+            if sample_weight != NULL:
                 w = sample_weight[i]
 
             for k in range(self.n_outputs):
@@ -988,6 +989,7 @@ cdef class RegressionCriterion(Criterion):
              - sum^n_samples[sum^n_components(2bij*bij_hat + bij_hat^2)]
            = sum^n_samples[sum^n_components(bij^2)] - se_dev.
         alpha is L2 regularization fraction to prevent g from getting too large, min_g||bij - (1 + alpha)Tij*g||^2.
+        Although optimal g is not affect by sample weights, SE is. 
         
         First, collect bij and Tij that lies in sorted samples[pos1:pos2] of this node.
         Next, find one set of 10 g that best fit Tij*g = bij for all samples in this node via LS fit. 
@@ -1004,6 +1006,9 @@ cdef class RegressionCriterion(Criterion):
 
         # Index array (samples) and variables definition
         cdef SIZE_t* samples = self.samples
+        cdef DOUBLE_t w = 1.
+        cdef DOUBLE_t* sample_weight = self.sample_weight
+        cdef DOUBLE_t weighted_n_node_samples = 0.
         cdef SIZE_t n_outputs = self.n_outputs
         cdef SIZE_t i1, i2, p, p0, i
         # abs() not possible for nogil
@@ -1062,10 +1067,14 @@ cdef class RegressionCriterion(Criterion):
         self.se_dev = 0.
         # Flatten Tij, bij and pick up Tij, bij for samples from pos1 to pos2 index at current node,
         # where p is n_samples (3rd axis), i1 is output (row), i2 is basis (column)
-        # TODO: prange necessary?
         for p in range(pos1, pos2):
             # Actual index of the original unsorted X
             i = samples[p]
+            # Sample weight of unpicked samples is 0 in TBRF bootstrap with replacement.
+            # This means LS fit becomes w*Tij*g = w*bij -- g unaffected
+            if sample_weight != NULL:
+                w = sample_weight[i]
+
             # Sample index but starts at 0 instead
             p0 = p - pos1
             for i1 in range(n_outputs):
@@ -1075,12 +1084,12 @@ cdef class RegressionCriterion(Criterion):
                     # tb_node[p0*n_outputs*10 + i1*10 + i2] = self.tb[i, i1, i2]
 
                     # C-contiguous flattened Tij^T, also interpreted as Fortran-contiguous Tij, 10 x n_samples*n_outputs.
-                    # tb_transpose_node's index is in the order of component -> n_samples -> basis
+                    # tb_transpose_node's index is in the order of component -> n_samples -> basis.
                     # In Tij^T matrix, the order of recording is: go through each row of a col then jump to next col
-                    tb_transpose_node[nelem_bij_node*i2 + p0*n_outputs + i1] = self.tb[i, i1, i2]*amplifier
+                    tb_transpose_node[nelem_bij_node*i2 + p0*n_outputs + i1] = w*self.tb[i, i1, i2]*amplifier
 
                 # bij at this node, n_samples*n_outputs x 1, will contain g solutions after dgelsd()
-                bij_node[p0*n_outputs + i1] = self.y[i, i1]
+                bij_node[p0*n_outputs + i1] = w*self.y[i, i1]
 
         # Least-squares fit with dgelsd() to solve g from
         # min_g J = ||Tij*g - bij||^2.
@@ -1122,6 +1131,12 @@ cdef class RegressionCriterion(Criterion):
         # Manual dot product by aggregating each column (basis) in each row (component).
         for p in range(pos1, pos2):
             i = samples[p]
+            if sample_weight != NULL:
+                w = sample_weight[i]
+
+            if verbose[0]:
+                weighted_n_node_samples += w
+
             p0 = p - pos1
             for i1 in range(n_outputs):
                 # For each component, perform bij_hat = sum^n_bases(Tij*g)
@@ -1134,17 +1149,17 @@ cdef class RegressionCriterion(Criterion):
                 # Now, se_dev is the deviatoric SE and is sum^n_samples[sum^n_outputs(2bij*bij_hat - bij_hat^2)],
                 # and SE = sum^n_samples[sum^n_outputs(bij^2)] - se_dev;
                 # MSE = sum^n_samples[sum^n_outputs(bij^2)]/n_samples - se_dev/n_samples.
-                self.se_dev += 2.*self.y[i, i1]*bij_hat_node[p0*n_outputs + i1] \
-                - bij_hat_node[p0*n_outputs + i1]**2.
+                self.se_dev += w*(2.*self.y[i, i1]*bij_hat_node[p0*n_outputs + i1]
+                - bij_hat_node[p0*n_outputs + i1]**2.)
                 # Calculate SE if debugging is on.
                 # Currently aggregating the non-deviatoric part of SE and later removing deviatoric part from it
                 if verbose[0]:
-                    se += self.y[i, i1]**2.
+                    se += w*self.y[i, i1]**2.
 
         # If debugging, remove deviatoric SE from non-deviatoric SE to derive accumulative SE of all components
         if verbose[0]:
             se -= self.se_dev
-            mse = se/n_samples
+            mse = se/weighted_n_node_samples
             printf("\n       MSE = %8.8f ", mse)
 
         return g_node_tmp
@@ -1248,8 +1263,14 @@ cdef class RegressionCriterion(Criterion):
             for k in range(self.n_outputs):
                 self.sum_left[k] = self.se_dev
 
-            # Also get number of samples in left child node, with weight disabled
-            self.weighted_n_left = new_pos - self.start
+            # Also get number of samples in left child node, with weight according to TBRF bootstrap with replacement
+            for p in range(self.start, new_pos):
+                i = samples[p]
+                if sample_weight != NULL:
+                    w = sample_weight[i]
+
+                self.weighted_n_left += w
+
             # Do the same for the right child node samples
             if self.tb_verbose:
                 printf("\n      Evaluating deviatoric SE for samples[split:end] of size %d ", (end - new_pos))
@@ -1369,12 +1390,15 @@ cdef class MSE(RegressionCriterion):
         # and MSE = (sq_sum_total - sum_total)/n_samples
         if self.tb_mode:
             impurity -= sum_total[0]/self.weighted_n_node_samples
+
         # Otherwise, MSE = [sq_sum_total - sum^n_outputs(y_bar^2)]/n_samples
         else:
             for k in range(self.n_outputs):
                 impurity -= (sum_total[k] / self.weighted_n_node_samples)**2.0
 
-        return impurity / self.n_outputs if not self.tb_mode else impurity
+            impurity /= self.n_outputs
+
+        return impurity
 
     cdef double proxy_impurity_improvement(self) nogil:
         """Compute a proxy of the impurity reduction
@@ -1410,15 +1434,12 @@ cdef class MSE(RegressionCriterion):
                 proxy_impurity_left += sum_left[k] * sum_left[k]
                 proxy_impurity_right += sum_right[k] * sum_right[k]
 
+            return (proxy_impurity_left / self.weighted_n_left +
+                    proxy_impurity_right / self.weighted_n_right)
+
         else:
             proxy_impurity_left = sum_left[0]
             proxy_impurity_right = sum_right[0]
-
-        if not self.tb_mode:
-
-            return (proxy_impurity_left / self.weighted_n_left +
-                    proxy_impurity_right / self.weighted_n_right)
-        else:
 
             return proxy_impurity_left + proxy_impurity_right
 
@@ -1452,8 +1473,8 @@ cdef class MSE(RegressionCriterion):
         for p in range(start, pos):
             i = samples[p]
 
-            # Sample weight is disabled for tensor basis criterion
-            if not self.tb_mode and sample_weight != NULL:
+            # Sample weight is 0 for unsampled points in RF bootstrap
+            if sample_weight != NULL:
                 w = sample_weight[i]
 
             for k in range(self.n_outputs):
@@ -1493,7 +1514,9 @@ cdef class MAE(RegressionCriterion):
     cdef np.ndarray right_child
     cdef DOUBLE_t* node_medians
 
-    def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples, bint tb_mode=0, bint tb_verbose=0, double alpha_g_fit=0.):
+    def __cinit__(self, SIZE_t n_outputs, SIZE_t n_samples,
+                  bint tb_mode=0, bint tb_verbose=0, double alpha_g_fit=0.,
+                  double g_cap=INFINITY):
         """Initialize parameters for this criterion.
 
         Parameters
@@ -1528,6 +1551,8 @@ cdef class MAE(RegressionCriterion):
         self.weighted_n_right = 0.0
         # L2 regularization fraction to penalize large optimal g from LS fit
         self.alpha_g_fit = alpha_g_fit
+        # Magnitude cap of found 10 optimal tensor basis coefficients g
+        self.g_cap = g_cap
 
         # Tensor basis criterion switch
         self.tb_mode, self.tb_verbose = tb_mode, tb_verbose

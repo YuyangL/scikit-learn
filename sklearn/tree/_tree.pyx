@@ -865,7 +865,7 @@ cdef class Tree:
 
     cpdef np.ndarray predict(self, object X,
                              # Extra kwargs
-                             np.ndarray tb=None, int realize_iter=None):
+                             np.ndarray tb=None, int realize_iter=-1):
         """Predict target for X.
         In tensor basis criterion, the predictions out is holding predicted 10 optimal g.
         Therefore, if tensor basis tb of shape (n_samples, n_outputs, n_bases) is supplied, 
@@ -886,7 +886,7 @@ cdef class Tree:
         cdef np.ndarray[DOUBLE_t, ndim=3] bij
         cdef SIZE_t i, j
         # Giving rise to the possibility of realize_iter kwarg to overwrite self.realize_iter
-        cdef SIZE_t realize_iter_final = realize_iter if realize_iter != None else self.realize_iter
+        cdef SIZE_t realize_iter_final = realize_iter if realize_iter > -1 else self.realize_iter
         if tb is not None:
             print("\nTensor basis is provided, the predictions are bij with {} realizability iterations. ".format(
                     realize_iter_final))

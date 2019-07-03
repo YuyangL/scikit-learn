@@ -108,8 +108,15 @@ def _parallel_build_trees(tree, forest, X, y, sample_weight, tree_idx, n_trees,
         else:
             curr_sample_weight = sample_weight.copy()
 
+        # Samples indicies are randomly picked with replacement,
+        # i.e. repeated sample index can happen and increase weight of that sample later
         indices = _generate_sample_indices(tree.random_state, n_samples)
+        # sample_count returns an array of length n_samples
+        # that tells whether each sample index in [0, n_samples) is picked .
+        # E.g. indices: [0, 1, 1, 3, 4],
+        # sample_counts: [0, 2, 0, 1, 1] means sample 1 is picked twice, sample 2 is picked 0 time, etc.
         sample_counts = np.bincount(indices, minlength=n_samples)
+        # Thus each sample index will be weighted accordingly
         curr_sample_weight *= sample_counts
 
         if class_weight == 'subsample':
@@ -423,7 +430,8 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
 
 def _accumulate_prediction(predict, X, out, lock,
                            # Extra tensor basis kwarg
-                           tb=None):
+                           tb=None,
+                           realize_iter=None):
     """This is a utility function for joblib's Parallel.
 
     If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
@@ -434,7 +442,8 @@ def _accumulate_prediction(predict, X, out, lock,
     """
     prediction = predict(X, check_input=False,
                          # Extra kwarg
-                         tb=tb)
+                         tb=tb,
+                         realize_iter=realize_iter)
     with lock:
         # TODO: consider post-proc of prediction e.g. filter bad prediction
         if len(out) == 1:
@@ -442,6 +451,30 @@ def _accumulate_prediction(predict, X, out, lock,
         else:
             for i in range(len(out)):
                 out[i] += prediction[i]
+
+
+def _append_prediction(predict, X, out, tree_idx,
+                       # Extra tensor basis kwarg
+                       tb=None,
+                       realize_iter=None):
+    """This is a utility function for joblib's Parallel.
+
+    If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
+    then anisotropy tensor bij of shape (n_samples, n_outputs) will be predicted.
+
+    It can't go locally in ForestClassifier or ForestRegressor, because joblib
+    complains that it cannot pickle it when placed there.
+    """
+    prediction = predict(X, check_input=False,
+                         # Extra kwarg
+                         tb=tb,
+                         realize_iter=realize_iter)
+
+    if len(out) == 1:
+        out[0][..., tree_idx] = prediction
+    else:
+        for i in range(len(out)):
+            out[i, tree_idx] = prediction[i]
 
 
 class ForestClassifier(BaseForest, ClassifierMixin, metaclass=ABCMeta):
@@ -754,22 +787,45 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
         # Assign chunk of trees to jobs
         n_jobs, _, _ = _partition_estimators(self.n_estimators, self.n_jobs)
 
-        # avoid storing the output of every estimator by summing them here
-        if self.n_outputs_ > 1:
-            y_hat = np.zeros((X.shape[0], self.n_outputs_), dtype=np.float64)
+        # Median prediction option instead of mean
+        iestimator = 0
+        if self.median_predict:
+            # Last D is every estimator's predictions appended
+            if self.n_outputs_ > 1:
+                y_hat = np.empty((X.shape[0], self.n_outputs_, len(self.estimators_)), dtype=np.float64)
+            else:
+                y_hat = np.empty((X.shape[0], len(self.estimators_)), dtype=np.float64)
+
+        # Else if default mean prediction
         else:
-            y_hat = np.zeros((X.shape[0]), dtype=np.float64)
+            # avoid storing the output of every estimator by summing them here
+            if self.n_outputs_ > 1:
+                y_hat = np.zeros((X.shape[0], self.n_outputs_), dtype=np.float64)
+            else:
+                y_hat = np.zeros((X.shape[0]), dtype=np.float64)
 
-        # Parallel loop
-        lock = threading.Lock()
-        Parallel(n_jobs=n_jobs, verbose=self.verbose,
-                 **_joblib_parallel_args(require="sharedmem"))(
-            delayed(_accumulate_prediction)(e.predict, X, [y_hat], lock,
-                                            # Extra kwarg
-                                            tb=tb, realize_iter=realize_iter)
-            for e in self.estimators_)
-
-        y_hat /= len(self.estimators_)
+        # Parallel loop.
+        # If doing default mean prediction.
+        # Lock is to prevent += from overlapping among different threads
+        if not self.median_predict:
+            lock = threading.Lock()
+            Parallel(n_jobs=n_jobs, verbose=self.verbose,
+                     **_joblib_parallel_args(require="sharedmem"))(
+                delayed(_accumulate_prediction)(e.predict, X, [y_hat], lock,
+                                                # Extra kwarg
+                                                tb=tb, realize_iter=realize_iter)
+                for e in self.estimators_)
+            y_hat /= len(self.estimators_)
+        # Else if doing median prediction, use _append_prediction() instead, no lock required.
+        # Also using extra arg of tree index i for stacking results in last axis of y_hat
+        else:
+            Parallel(n_jobs=n_jobs, verbose=self.verbose,
+                     **_joblib_parallel_args(require="sharedmem"))(
+                    delayed(_append_prediction)(e.predict, X, [y_hat], i,
+                                                    # Extra kwarg
+                                                    tb=tb, realize_iter=realize_iter)
+                    for i, e in enumerate(self.estimators_))
+            y_hat = np.median(y_hat, axis=2, overwrite_input=True)
 
         return y_hat
 

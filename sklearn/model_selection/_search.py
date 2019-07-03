@@ -455,7 +455,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
     @if_delegate_has_method(delegate=('best_estimator_', 'estimator'))
     def predict(self, X,
                 # Extra kwarg of tensor basis
-                tb=None):
+                tb=None,
+                realize_iter=None):
         """Call predict on the estimator with the best found parameters.
         If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided, the prediction is anisotropy tensor
         bij.
@@ -476,7 +477,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
         self._check_is_fitted('predict')
 
         # Return depending on whether tb is provided. If so, assume estimator.predict() takes tb
-        return self.best_estimator_.predict(X) if tb is None else self.best_estimator_.predict(X, tb)
+        return self.best_estimator_.predict(X) if tb is None else self.best_estimator_.predict(X, tb=tb,
+                                                                                               realize_iter=realize_iter)
 
     @if_delegate_has_method(delegate=('best_estimator_', 'estimator'))
     def predict_proba(self, X):

@@ -542,6 +542,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # bij = sum^n_bases(Tij*g),
         # where optimal g has been saved at each tree node.
         # proba is then shape (n_samples, n_outputs, 1)
+        if realize_iter is None: realize_iter = -1
         proba = self.tree_.predict(X, tb=tb, realize_iter=realize_iter)
         n_samples = X.shape[0]
 
