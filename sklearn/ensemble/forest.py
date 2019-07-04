@@ -790,6 +790,9 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
         # Median prediction option instead of mean
         iestimator = 0
         if self.median_predict:
+            if self.verbose > 1:
+                print("\nPerforming median prediction...")
+
             # Last D is every estimator's predictions appended
             if self.n_outputs_ > 1:
                 y_hat = np.empty((X.shape[0], self.n_outputs_, len(self.estimators_)), dtype=np.float64)

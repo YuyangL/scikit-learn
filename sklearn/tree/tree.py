@@ -1241,7 +1241,8 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
                  # L2 regularization coefficient to penalize large g during split finder
                  alpha_g_split=0.,
                  # Cap of g magnitude during LS fit
-                 g_cap=None):
+                 g_cap=None,
+                 realize_iter=0):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1261,7 +1262,8 @@ class DecisionTreeRegressor(BaseDecisionTree, RegressorMixin):
             split_verbose=split_verbose,
             alpha_g_fit=alpha_g_fit,
             alpha_g_split=alpha_g_split,
-            g_cap=g_cap)
+            g_cap=g_cap,
+            realize_iter=realize_iter)
 
     def fit(self, X, y, sample_weight=None, check_input=True,
             X_idx_sorted=None,
@@ -1680,7 +1682,8 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
                  # L2 regularization coefficient to penalize large g during split finder
                  alpha_g_split=0.,
                  # Cap of g magnitude during LS fit
-                 g_cap=None):
+                 g_cap=None,
+                 realize_iter=0):
         super().__init__(
             criterion=criterion,
             splitter=splitter,
@@ -1701,4 +1704,5 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
             split_verbose=split_verbose,
             alpha_g_fit=alpha_g_fit,
             alpha_g_split=alpha_g_split,
-            g_cap=g_cap)
+            g_cap=g_cap,
+            realize_iter=realize_iter)

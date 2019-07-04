@@ -436,7 +436,7 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
         # Models other than TBDT and TBRF don't accept extra arg of tb
         if tb is not None:
 
-            return score(self.best_estimator_, X, y, tb)
+            return score(self.best_estimator_, X, y, tb=tb)
         else:
             return score(self.best_estimator_, X, y)
 

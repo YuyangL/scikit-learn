@@ -89,7 +89,9 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
                             y_numeric=is_regressor(self))
         return ret
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None,
+            # Extra kwarg of tensor basis for TBDT
+            tb=None):
         """Build a boosted classifier/regressor from the training set (X, y).
 
         Parameters
@@ -115,6 +117,9 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
             raise ValueError("learning_rate must be greater than zero")
 
         X, y = self._validate_data(X, y)
+        # Swap axis if tb is shape (n_samples, n_bases, n_outputs) to (n_samples, n_outputs, n_bases)
+        if tb is not None and tb.shape[1] == 10:
+            tb = np.swapaxes(tb, 1, 2)
 
         if sample_weight is None:
             # Initialize weights to 1 / n_samples
@@ -147,7 +152,9 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
                 iboost,
                 X, y,
                 sample_weight,
-                random_state)
+                random_state,
+                # Extra kwarg
+                tb=tb)
 
             # Early termination
             if sample_weight is None:
@@ -173,7 +180,9 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
         return self
 
     @abstractmethod
-    def _boost(self, iboost, X, y, sample_weight, random_state):
+    def _boost(self, iboost, X, y, sample_weight, random_state,
+               # Extra kwarg of tensor basis for TBDT
+               tb=None):
         """Implement a single boost.
 
         Warning: This method needs to be overridden by subclasses.
@@ -212,7 +221,9 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
         """
         pass
 
-    def staged_score(self, X, y, sample_weight=None):
+    def staged_score(self, X, y, sample_weight=None,
+                     # Extra kwarg of tensor basis for TBDT
+                     tb=None):
         """Return staged scores for X, y.
 
         This generator method yields the ensemble score after each iteration of
@@ -237,7 +248,9 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
         """
         X = self._validate_data(X)
 
-        for y_pred in self.staged_predict(X):
+        for y_pred in self.staged_predict(X,
+                                          # Extra kwarg
+                                          tb=tb):
             if is_classifier(self):
                 yield accuracy_score(y, y_pred, sample_weight=sample_weight)
             else:
@@ -399,7 +412,9 @@ class AdaBoostClassifier(BaseWeightBoosting, ClassifierMixin):
 
         self.algorithm = algorithm
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None,
+            # Ignore tensor basis inputs
+            **kwargs):
         """Build a boosted classifier from the training set (X, y).
 
         Parameters
@@ -444,7 +459,9 @@ class AdaBoostClassifier(BaseWeightBoosting, ClassifierMixin):
             raise ValueError("%s doesn't support sample_weight."
                              % self.base_estimator_.__class__.__name__)
 
-    def _boost(self, iboost, X, y, sample_weight, random_state):
+    def _boost(self, iboost, X, y, sample_weight, random_state,
+               # Ignore tensor basis inputs
+               **kwargs):
         """Implement a single boost.
 
         Perform a single boost according to the real multi-class SAMME.R
@@ -967,7 +984,9 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         self.loss = loss
         self.random_state = random_state
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None,
+            # Extra kwarg of tenso basis for TBDT
+            tb=None):
         """Build a boosted regressor from the training set (X, y).
 
         Parameters
@@ -993,14 +1012,18 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
                 "loss must be 'linear', 'square', or 'exponential'")
 
         # Fit
-        return super().fit(X, y, sample_weight)
+        return super().fit(X, y, sample_weight,
+                           # Extra kwarg
+                           tb=tb)
 
     def _validate_estimator(self):
         """Check the estimator and set the base_estimator_ attribute."""
         super()._validate_estimator(
             default=DecisionTreeRegressor(max_depth=3))
 
-    def _boost(self, iboost, X, y, sample_weight, random_state):
+    def _boost(self, iboost, X, y, sample_weight, random_state,
+               # Extra kwarg of tensor basis for TBDT
+               tb=None):
         """Implement a single boost for regression
 
         Perform a single boost according to the AdaBoost.R2 algorithm and
@@ -1053,8 +1076,13 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         # for all samples in the training set
         X_ = safe_indexing(X, bootstrap_idx)
         y_ = safe_indexing(y, bootstrap_idx)
-        estimator.fit(X_, y_)
-        y_predict = estimator.predict(X)
+        # Additional bootstrap for tensor basis
+        if tb is not None:
+            tb_ = safe_indexing(tb, bootstrap_idx)
+
+        # For TBDT, extra kwarg
+        estimator.fit(X_, y_) if tb is None else estimator.fit(X_, y_, tb=tb_)
+        y_predict = estimator.predict(X) if tb is None else estimator.predict(X, tb=tb)
 
         error_vect = np.abs(y_predict - y)
         error_max = error_vect.max()
@@ -1092,10 +1120,18 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
 
         return sample_weight, estimator_weight, estimator_error
 
-    def _get_median_predict(self, X, limit):
+    def _get_median_predict(self, X, limit,
+                            # Extra kwargs for TBDT
+                            tb=None,
+                            realize_iter=None):
         # Evaluate predictions of all estimators
-        predictions = np.array([
-            est.predict(X) for est in self.estimators_[:limit]]).T
+        # Extra kwarg for TBDT's predict()
+        if tb is None:
+            predictions = np.array([
+                est.predict(X) for est in self.estimators_[:limit]]).T
+        else:
+            predictions = np.array([
+                    est.predict(X, tb=tb, realize_iter=realize_iter) for est in self.estimators_[:limit]]).T
 
         # Sort the predictions
         sorted_idx = np.argsort(predictions, axis=1)
@@ -1110,7 +1146,10 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         # Return median predictions
         return predictions[np.arange(_num_samples(X)), median_estimators]
 
-    def predict(self, X):
+    def predict(self, X,
+                # Extra kwargs for TBDT
+                tb=None,
+                realize_iter=None):
         """Predict regression value for X.
 
         The predicted regression value of an input sample is computed
@@ -1130,9 +1169,15 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         check_is_fitted(self, "estimator_weights_")
         X = self._validate_data(X)
 
-        return self._get_median_predict(X, len(self.estimators_))
+        return self._get_median_predict(X, len(self.estimators_),
+                                        # Extra kwargs
+                                        tb=tb,
+                                        realize_iter=realize_iter)
 
-    def staged_predict(self, X):
+    def staged_predict(self, X,
+                       # Extra kwargs for TBDT
+                       tb=None,
+                       realize_iter=None):
         """Return staged predictions for X.
 
         The predicted regression value of an input sample is computed
@@ -1156,4 +1201,7 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         X = self._validate_data(X)
 
         for i, _ in enumerate(self.estimators_, 1):
-            yield self._get_median_predict(X, limit=i)
+            yield self._get_median_predict(X, limit=i,
+                                           # Extra kwargs
+                                           tb=tb,
+                                           realize_iter=realize_iter)

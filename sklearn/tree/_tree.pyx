@@ -982,24 +982,24 @@ cdef class Tree:
                 for j in range(3):
                     labels[i, bii[j]] = A[j, j]
 
-                labels[i, 1] = A[0, 1]
-                labels[i, 5] = A[1, 2]
-                labels[i, 2] = A[0, 2]
-                labels[i, 3] = A[0, 1]
-                labels[i, 7] = A[1, 2]
-                labels[i, 6] = A[0, 2]
+                labels[i, b12] = A[0, 1]
+                labels[i, b23] = A[1, 2]
+                labels[i, b13] = A[0, 2]
+                labels[i, b21] = A[0, 1]
+                labels[i, b32] = A[1, 2]
+                labels[i, b31] = A[0, 2]
             if np.max(evalues) > 1./3. - np.sort(evalues)[1]:
                 evalues = evalues*(1./3. - np.sort(evalues)[1])/np.max(evalues)
                 A = np.dot(np.dot(evectors, np.diag(evalues)), np.linalg.inv(evectors))
                 for j in range(3):
                     labels[i, bii[j]] = A[j, j]
 
-                labels[i, 1] = A[0, 1]
-                labels[i, 5] = A[1, 2]
-                labels[i, 2] = A[0, 2]
-                labels[i, 3] = A[0, 1]
-                labels[i, 7] = A[1, 2]
-                labels[i, 6] = A[0, 2]
+                labels[i, b12] = A[0, 1]
+                labels[i, b23] = A[1, 2]
+                labels[i, b13] = A[0, 2]
+                labels[i, b21] = A[0, 1]
+                labels[i, b32] = A[1, 2]
+                labels[i, b31] = A[0, 2]
 
         return labels
 
