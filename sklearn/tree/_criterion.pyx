@@ -1115,7 +1115,7 @@ cdef class RegressionCriterion(Criterion):
                              self.ls_s, &rcond, &rank,
                              self.ls_work, &lwork, self.ls_iwork, &info)
         if verbose[0]:
-            printf("\n       g solved with exit code %d and A effective rank %d", info, rank)
+            printf("\n       g solved, exit code %d, A effective rank %d, %d rows, %d output(s)", info, rank, row, n_outputs)
 
         # Since g[10 x 1] is stored in bij_node after dgelsd(),
         # go through each basis and get corresponding g_node at this node

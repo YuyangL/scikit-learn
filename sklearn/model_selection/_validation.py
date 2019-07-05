@@ -880,18 +880,39 @@ def _fit_and_predict(estimator, X, y, train, test, verbose, fit_params,
     """
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
+    # Check if tb key is stored in fit_params, if so, the estimator is TBDT
+    if 'tb' in fit_params.keys():
+        tb = fit_params['tb']
+        tb_mode = True
+        # Remove tb key-value pair in fit_params and later supply manually in fit()
+        del fit_params['tb']
+    else:
+        tb_mode = False
+
+    # Some other fit parameter arrays ared indexed according to X, but tb which we split manually like y
     fit_params = {k: _index_param_value(X, v, train)
                   for k, v in fit_params.items()}
 
-    X_train, y_train = _safe_split(estimator, X, y, train)
-    X_test, _ = _safe_split(estimator, X, y, test, train)
+    # If in tensor basis mode, then split tb as well
+    if not tb_mode:
+        X_train, y_train = _safe_split(estimator, X, y, train)
+        X_test, _ = _safe_split(estimator, X, y, test, train)
+    else:
+        X_train, y_train, tb_train = _safe_split(estimator, X, y, train, tb=tb)
+        X_test, _, tb_test = _safe_split(estimator, X, y, test, train, tb=tb)
 
     if y_train is None:
         estimator.fit(X_train, **fit_params)
     else:
-        estimator.fit(X_train, y_train, **fit_params)
+        # Additional tb input in case of TBDT
+        if not tb_mode:
+            estimator.fit(X_train, y_train, **fit_params)
+        else:
+            estimator.fit(X_train, y_train, tb=tb_train, **fit_params)
+
     func = getattr(estimator, method)
-    predictions = func(X_test)
+    # If in tb mode, supply tb_test to predict() too
+    predictions = func(X_test) if not tb_mode else func(X_test, tb=tb_test)
     if method in ['decision_function', 'predict_proba', 'predict_log_proba']:
         if isinstance(predictions, list):
             predictions = [_enforce_prediction_order(

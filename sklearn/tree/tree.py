@@ -229,9 +229,13 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # Also make sure tb is C-contiguous and np.float64, if it's not None
         # tb_mode will be used for Criterion.__cinit__()
         if tb is not None:
+            # Make sure tb is shape (n_samples, n_outputs, n_bases)
+            if tb.shape[1] == 10:
+                tb = np.swapaxes(tb, 1, 2)
+
             tb = __ensureContiguousDOUBLE(tb)
             self.tb_mode = True
-            print('\nFitting DBRT using tensor basis MSE criterion,'
+            print('\nFitting TBDT using tensor basis MSE criterion,'
                   '\n {0} split finder, alpha_g_fit = {1}, alpha_g_split = {2}, g_cap = {3}... '.format(
                     self.split_finder,
                                                                                               self.alpha_g_fit,
@@ -537,6 +541,11 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         """
         check_is_fitted(self, 'tree_')
         X = self._validate_X_predict(X, check_input)
+        # If tb is provided, make sure its shape is
+        # (n_samples, n_outputs, n_bases)
+        if tb is not None and tb.shape[1] == 10:
+            tb = np.swapaxes(tb, 1, 2)
+
         # Extra kwargs of tb and realize_iter
         # If tb is provided, then the prediction is assumed
         # bij = sum^n_bases(Tij*g),
@@ -565,7 +574,9 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # Regression
         else:
             if self.n_outputs_ == 1:
-                return proba[:, 0]
+                # If tb is provided, prediction of 1 output has shape (n_samples, 1, 1)
+                # This is relevant for RegressorChain()
+                return proba[:, 0] if tb is None else proba[:, 0, 0]
 
             else:
                 return proba[:, :, 0]

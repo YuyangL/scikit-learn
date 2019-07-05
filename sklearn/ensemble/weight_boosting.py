@@ -116,7 +116,8 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
         if self.learning_rate <= 0:
             raise ValueError("learning_rate must be greater than zero")
 
-        X, y = self._validate_data(X, y)
+        # Don't check for y is tb is provided since y becomes 2D, i.e. multioutputs
+        if tb is None: X, y = self._validate_data(X, y)
         # Swap axis if tb is shape (n_samples, n_bases, n_outputs) to (n_samples, n_outputs, n_bases)
         if tb is not None and tb.shape[1] == 10:
             tb = np.swapaxes(tb, 1, 2)
@@ -1084,7 +1085,9 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         estimator.fit(X_, y_) if tb is None else estimator.fit(X_, y_, tb=tb_)
         y_predict = estimator.predict(X) if tb is None else estimator.predict(X, tb=tb)
 
-        error_vect = np.abs(y_predict - y)
+        # If in tensor basis mode, then y is multioutputs, calculate Frobenius norm for each sample
+        # to collapse y from shape (n_samples, n_outputs) to (n_samples,)
+        error_vect = np.abs(y_predict - y) if tb is None else np.linalg.norm(y_predict - y, axis=1)
         error_max = error_vect.max()
 
         if error_max != 0.:
@@ -1129,12 +1132,18 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         if tb is None:
             predictions = np.array([
                 est.predict(X) for est in self.estimators_[:limit]]).T
+            # Sort the predictions
+            sorted_idx = np.argsort(predictions, axis=1)
         else:
-            predictions = np.array([
-                    est.predict(X, tb=tb, realize_iter=realize_iter) for est in self.estimators_[:limit]]).T
+            # predictions is 3D instead of 2D due to multioutputs
+            # Axis 1 is n_outputs, axis 2 is n_estimators
+            predictions = np.empty((X.shape[0], tb.shape[1], limit))
+            for i, est in enumerate(self.estimators_[:limit]):
+                predictions[..., i] = est.predict(X, tb=tb, realize_iter=realize_iter)
 
-        # Sort the predictions
-        sorted_idx = np.argsort(predictions, axis=1)
+            # First collapse axis 1: n_outputs by calculating Frobenius norm,
+            # then n_estimator becomes axis 1, sort along it for every sample
+            sorted_idx = np.argsort(np.linalg.norm(predictions, axis=1), axis=1)
 
         # Find index of median prediction for each sample
         weight_cdf = stable_cumsum(self.estimator_weights_[sorted_idx], axis=1)
@@ -1144,7 +1153,12 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         median_estimators = sorted_idx[np.arange(_num_samples(X)), median_idx]
 
         # Return median predictions
-        return predictions[np.arange(_num_samples(X)), median_estimators]
+        if tb is None:
+            return predictions[np.arange(_num_samples(X)), median_estimators]
+        # If in tensor basis mode with multioutput predictions
+        # TODO: why arange?
+        else:
+            return predictions[np.arange(_num_samples(X)), :, median_estimators]
 
     def predict(self, X,
                 # Extra kwargs for TBDT

@@ -394,7 +394,9 @@ class _BaseChain(BaseEstimator, metaclass=ABCMeta):
         self.random_state = random_state
 
     @abstractmethod
-    def fit(self, X, Y):
+    def fit(self, X, Y,
+            # Extra kwarg of tensor basis for TBDT
+            tb=None):
         """Fit the model to data matrix X and targets Y.
 
         Parameters
@@ -409,6 +411,9 @@ class _BaseChain(BaseEstimator, metaclass=ABCMeta):
         self : object
         """
         X, Y = check_X_y(X, Y, multi_output=True, accept_sparse=True)
+        # If tb is provided, make sure it has shape (n_samples, n_outputs, n_bases)
+        if tb is not None and tb.shape[1] == 10:
+            tb = np.swapaxes(tb, 1, 2)
 
         random_state = check_random_state(self.random_state)
         check_array(X, accept_sparse=True)
@@ -430,6 +435,7 @@ class _BaseChain(BaseEstimator, metaclass=ABCMeta):
                 X_aug = sp.hstack((X, Y_pred_chain), format='lil')
                 X_aug = X_aug.tocsr()
             else:
+                # All n_outputs of y are stacked to x
                 X_aug = np.hstack((X, Y_pred_chain))
 
         elif sp.issparse(X):
@@ -444,12 +450,26 @@ class _BaseChain(BaseEstimator, metaclass=ABCMeta):
 
         for chain_idx, estimator in enumerate(self.estimators_):
             y = Y[:, self.order_[chain_idx]]
-            estimator.fit(X_aug[:, :(X.shape[1] + chain_idx)], y)
+            # tb of only one selected output
+            tb_ij = tb[:, self.order_[chain_idx], :]
+            # Ensure tb_ij is still 3D
+            tb_ij = tb_ij.reshape((tb.shape[0], 1, tb.shape[2]))
+            # Extra kwarg if tb is not None supply tb_ij with shape (n_samples, 1, n_bases)
+            if tb is not None:
+                estimator.fit(X_aug[:, :(X.shape[1] + chain_idx)], y,
+                          tb=tb_ij)
+            else:
+                estimator.fit(X_aug[:, :(X.shape[1] + chain_idx)], y)
+
             if self.cv is not None and chain_idx < len(self.estimators_) - 1:
+                # Supply tb of an output in fit_params dict and pass it onto cross_val_predict()
+                fit_params = {'tb': tb_ij} if tb is not None else None
                 col_idx = X.shape[1] + chain_idx
                 cv_result = cross_val_predict(
                     self.base_estimator, X_aug[:, :col_idx],
-                    y=y, cv=self.cv)
+                    y=y, cv=self.cv,
+                    # Extra kwarg input of fit_params
+                    fit_params=fit_params)
                 if sp.issparse(X_aug):
                     X_aug[:, col_idx] = np.expand_dims(cv_result, 1)
                 else:
@@ -457,7 +477,11 @@ class _BaseChain(BaseEstimator, metaclass=ABCMeta):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X,
+                # Extra kwarg for bij prediction
+                tb=None,
+                # Ignore realizability iterator of bij prediction
+                **kwargs):
         """Predict on the data matrix X using the ClassifierChain model.
 
         Parameters
@@ -483,7 +507,10 @@ class _BaseChain(BaseEstimator, metaclass=ABCMeta):
                     X_aug = sp.hstack((X, previous_predictions))
             else:
                 X_aug = np.hstack((X, previous_predictions))
-            Y_pred_chain[:, chain_idx] = estimator.predict(X_aug)
+
+            # Extra kwarg if tb is supplied
+            # Realizability iterator of bij is disabled in predict() since bij is predicted 1 at a time
+            Y_pred_chain[:, chain_idx] = estimator.predict(X_aug) if tb is None else estimator.predict(X_aug, tb=tb)
 
         inv_order = np.empty_like(self.order_)
         inv_order[self.order_] = np.arange(len(self.order_))
@@ -567,7 +594,9 @@ class ClassifierChain(_BaseChain, ClassifierMixin, MetaEstimatorMixin):
 
     """
 
-    def fit(self, X, Y):
+    def fit(self, X, Y,
+            # Ignore tb inputs
+            **kwargs):
         """Fit the model to data matrix X and targets Y.
 
         Parameters
@@ -717,7 +746,9 @@ class RegressorChain(_BaseChain, RegressorMixin, MetaEstimatorMixin):
         chaining.
 
     """
-    def fit(self, X, Y):
+    def fit(self, X, Y,
+            # Additional kwarg of tensor basis for tensor basis MSE criterion
+            tb=None):
         """Fit the model to data matrix X and targets Y.
 
         Parameters
@@ -731,7 +762,7 @@ class RegressorChain(_BaseChain, RegressorMixin, MetaEstimatorMixin):
         -------
         self : object
         """
-        super().fit(X, Y)
+        super().fit(X, Y, tb=tb)
         return self
 
     def _more_tags(self):
