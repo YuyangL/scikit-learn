@@ -39,6 +39,7 @@ from ..metrics import accuracy_score, r2_score
 from ..utils.validation import check_is_fitted
 from ..utils.validation import has_fit_parameter
 from ..utils.validation import _num_samples
+from warnings import warn
 
 __all__ = [
     'AdaBoostClassifier',
@@ -224,7 +225,8 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
 
     def staged_score(self, X, y, sample_weight=None,
                      # Extra kwarg of tensor basis for TBDT
-                     tb=None):
+                     tb=None,
+                     bij_novelty=None):
         """Return staged scores for X, y.
 
         This generator method yields the ensemble score after each iteration of
@@ -251,7 +253,8 @@ class BaseWeightBoosting(BaseEnsemble, metaclass=ABCMeta):
 
         for y_pred in self.staged_predict(X,
                                           # Extra kwarg
-                                          tb=tb):
+                                          tb=tb,
+                                          bij_novelty=bij_novelty):
             if is_classifier(self):
                 yield accuracy_score(y, y_pred, sample_weight=sample_weight)
             else:
@@ -974,7 +977,9 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
                  n_estimators=50,
                  learning_rate=1.,
                  loss='linear',
-                 random_state=None):
+                 random_state=None,
+                 # Extra kwarg
+                 bij_novelty=None):
 
         super().__init__(
             base_estimator=base_estimator,
@@ -984,6 +989,8 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
 
         self.loss = loss
         self.random_state = random_state
+        # Extra initialization
+        self.bij_novelty=bij_novelty
 
     def fit(self, X, y, sample_weight=None,
             # Extra kwarg of tenso basis for TBDT
@@ -1083,7 +1090,9 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
 
         # For TBDT, extra kwarg
         estimator.fit(X_, y_) if tb is None else estimator.fit(X_, y_, tb=tb_)
-        y_predict = estimator.predict(X) if tb is None else estimator.predict(X, tb=tb)
+        y_predict = estimator.predict(X) if tb is None else estimator.predict(X, tb=tb,
+                                                                              # Extra kwarg
+                                                                              bij_novelty=self.bij_novelty)
 
         # If in tensor basis mode, then y is multioutputs, calculate Frobenius norm for each sample
         # to collapse y from shape (n_samples, n_outputs) to (n_samples,)
@@ -1126,7 +1135,8 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
     def _get_median_predict(self, X, limit,
                             # Extra kwargs for TBDT
                             tb=None,
-                            realize_iter=None):
+                            realize_iter=None,
+                            bij_novelty=None):
         # Evaluate predictions of all estimators
         # Extra kwarg for TBDT's predict()
         if tb is None:
@@ -1135,11 +1145,16 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
             # Sort the predictions
             sorted_idx = np.argsort(predictions, axis=1)
         else:
-            # predictions is 3D instead of 2D due to multioutputs
+            if bij_novelty not in ('lim', 'limit', 'cap', None):
+                warn('\nbij_novelty should be either "lim", "limit", "cap", or None!\n', stacklevel=2)
+                bij_novelty = None
+
+            # predictions is 3D instead of 2D due to multioutputs.
             # Axis 1 is n_outputs, axis 2 is n_estimators
             predictions = np.empty((X.shape[0], tb.shape[1], limit))
             for i, est in enumerate(self.estimators_[:limit]):
-                predictions[..., i] = est.predict(X, tb=tb, realize_iter=realize_iter)
+                predictions[..., i] = est.predict(X, tb=tb, realize_iter=realize_iter,
+                                                  bij_novelty=bij_novelty)
 
             # First collapse axis 1: n_outputs by calculating Frobenius norm,
             # then n_estimator becomes axis 1, sort along it for every sample
@@ -1163,7 +1178,8 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
     def predict(self, X,
                 # Extra kwargs for TBDT
                 tb=None,
-                realize_iter=None):
+                realize_iter=None,
+                bij_novelty=None):
         """Predict regression value for X.
 
         The predicted regression value of an input sample is computed
@@ -1186,12 +1202,14 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         return self._get_median_predict(X, len(self.estimators_),
                                         # Extra kwargs
                                         tb=tb,
-                                        realize_iter=realize_iter)
+                                        realize_iter=realize_iter,
+                                        bij_novelty=bij_novelty)
 
     def staged_predict(self, X,
                        # Extra kwargs for TBDT
                        tb=None,
-                       realize_iter=None):
+                       realize_iter=None,
+                       bij_novelty=None):
         """Return staged predictions for X.
 
         The predicted regression value of an input sample is computed
@@ -1218,4 +1236,5 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
             yield self._get_median_predict(X, limit=i,
                                            # Extra kwargs
                                            tb=tb,
-                                           realize_iter=realize_iter)
+                                           realize_iter=realize_iter,
+                                           bij_novelty=bij_novelty)

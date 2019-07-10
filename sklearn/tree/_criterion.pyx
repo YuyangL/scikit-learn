@@ -854,10 +854,10 @@ cdef class RegressionCriterion(Criterion):
             self.ls_s = <double*> calloc(10, sizeof(double))
             # Dimension max(1, lwork), where lwork is at least
             # 12col + 2col*SMLSIZ + 8col*NLVL + col*nrhs + (SMLSIZ + 1)**2 if row >= col,
-            # SMLSIZ is the maximum size of subproblems at bottom of computation tree (usually 25, take 26),
+            # SMLSIZ is the maximum size of subproblems at bottom of computation tree (usually 25, take 30),
             # NLVL = max(0, int(log_2(min(row, col)/(SMLSIZ + 1))) + 1) = 0 take 1,
-            # => 12*10 + 2*10*26 + 8*10*1 + 10*1 + (26 + 1)**2 = 1459, take 1500
-            self.ls_work = <double*> calloc(1500, sizeof(double))
+            # => 12*10 + 2*10*30 + 8*10*1 + 10*1 + (30 + 1)**2 = 1539, take 1600
+            self.ls_work = <double*> calloc(1600, sizeof(double))
             # Dimension max(1, 3*min(A's row, col)*NVLV + 11*min(A's row, col)), see above,
             # = max(1, 3*10*1 + 11*10) = 140
             self.ls_iwork = <int*> calloc(140, sizeof(int))
@@ -1058,10 +1058,10 @@ cdef class RegressionCriterion(Criterion):
         cdef int rank, info
         # Dimension of ls_work, at least
         # 12col + 2col*SMLSIZ + 8col*NLVL + col*nrhs + (SMLSIZ + 1)**2 if row >= col,
-        # SMLSIZ is the maximum size of subproblems at bottom of computation tree (usually 25, take 26),
+        # SMLSIZ is the maximum size of subproblems at bottom of computation tree (usually 25, take 30),
         # NLVL = max(0, int(log_2(min(row, col)/(SMLSIZ + 1))) + 1) = 0 take 1,
-        # => 12*10 + 2*10*26 + 8*10*1 + 10*1 + (26 + 1)**2 = 1459, take 1500
-        cdef int lwork = 1500
+        # => 12*10 + 2*10*30 + 8*10*1 + 10*1 + (26 + 1)**2 = 1539, take 1600
+        cdef int lwork = 1600
 
         # Reset deviatoric SE scalar to 0, replacing functionality of self.sum_* n_outputs array
         self.se_dev = 0.

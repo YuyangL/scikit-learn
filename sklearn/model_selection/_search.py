@@ -382,7 +382,9 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
     @abstractmethod
     def __init__(self, estimator, scoring=None, n_jobs=None, iid='warn',
                  refit=True, cv='warn', verbose=0, pre_dispatch='2*n_jobs',
-                 error_score='raise-deprecating', return_train_score=True):
+                 error_score='raise-deprecating', return_train_score=True,
+                 # Extra kwarg
+                 bij_novelty=None):
 
         self.scoring = scoring
         self.estimator = estimator
@@ -394,6 +396,12 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
         self.pre_dispatch = pre_dispatch
         self.error_score = error_score
         self.return_train_score = return_train_score
+        # bij_novelty can only do limiting or nothing
+        if bij_novelty not in ('lim', 'limit', 'cap', None):
+            warnings.warn('\nbij_novelty should be either "lim", "limit", "cap", or None!\n', stacklevel=2)
+            self.bij_novelty = None
+        else:
+            self.bij_novelty = bij_novelty
 
     @property
     def _estimator_type(self):
@@ -401,7 +409,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
 
     def score(self, X, y=None,
               # Extra kwarg of tensor basis
-              tb=None):
+              tb=None,
+              bij_novelty=None):
         """Returns the score on the given data, if the estimator has been refit.
 
         This uses the score defined by ``scoring`` where provided, and the
@@ -436,7 +445,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
         # Models other than TBDT and TBRF don't accept extra arg of tb
         if tb is not None:
 
-            return score(self.best_estimator_, X, y, tb=tb)
+            return score(self.best_estimator_, X, y, tb=tb,
+                         bij_novelty=bij_novelty)
         else:
             return score(self.best_estimator_, X, y)
 
@@ -456,7 +466,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
     def predict(self, X,
                 # Extra kwarg of tensor basis
                 tb=None,
-                realize_iter=None):
+                realize_iter=None,
+                bij_novelty=None):
         """Call predict on the estimator with the best found parameters.
         If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided, the prediction is anisotropy tensor
         bij.
@@ -478,7 +489,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
 
         # Return depending on whether tb is provided. If so, assume estimator.predict() takes tb
         return self.best_estimator_.predict(X) if tb is None else self.best_estimator_.predict(X, tb=tb,
-                                                                                               realize_iter=realize_iter)
+                                                                                               realize_iter=realize_iter,
+                                                                                               bij_novelty=bij_novelty)
 
     @if_delegate_has_method(delegate=('best_estimator_', 'estimator'))
     def predict_proba(self, X):
@@ -666,7 +678,9 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
                                     return_times=True,
                                     return_parameters=False,
                                     error_score=self.error_score,
-                                    verbose=self.verbose)
+                                    verbose=self.verbose,
+                                    # Extra kwarg
+                                    bij_novelty=self.bij_novelty)
         results = {}
         with parallel:
             all_candidate_params = []
@@ -1161,12 +1175,16 @@ class GridSearchCV(BaseSearchCV):
     def __init__(self, estimator, param_grid, scoring=None,
                  n_jobs=None, iid='warn', refit=True, cv='warn', verbose=0,
                  pre_dispatch='2*n_jobs', error_score='raise-deprecating',
-                 return_train_score=False):
+                 return_train_score=False,
+                 # Extra kwarg
+                 bij_novelty=None):
         super().__init__(
             estimator=estimator, scoring=scoring,
             n_jobs=n_jobs, iid=iid, refit=refit, cv=cv, verbose=verbose,
             pre_dispatch=pre_dispatch, error_score=error_score,
-            return_train_score=return_train_score)
+            return_train_score=return_train_score,
+            # Extra kwarg
+            bij_novelty=bij_novelty)
         self.param_grid = param_grid
         _check_param_grid(param_grid)
 

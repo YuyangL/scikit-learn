@@ -919,10 +919,10 @@ cdef class Tree:
         to a realizable state.
     
         :param labels: The predicted anisotropy tensor.
-        :type labels: np.ndarray[n_points, 9]
+        :type labels: np.ndarray[n_points, 6/9]
     
         :return: The predicted realizable anisotropy tensor.
-        :type: np.ndarray[n_points, 9]
+        :type: np.ndarray[n_points, 6/9]
         """
         cdef unsigned int n_points, n_outputs, i, j
         cdef np.ndarray[np.float_t, ndim=2] A, evectors

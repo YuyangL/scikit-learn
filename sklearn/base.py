@@ -366,7 +366,7 @@ class RegressorMixin:
     def score(self, X, y, sample_weight=None,
               # Extra kwarg of tensor basis tb to predict anisotropy tensor bij (y)
               tb=None,
-              realize_iter=None):
+              bij_novelty=None):
         """Returns the coefficient of determination R^2 of the prediction.
 
         The coefficient R^2 is defined as (1 - u/v), where u is the residual
@@ -417,8 +417,11 @@ class RegressorMixin:
 
         from .metrics import r2_score
         from .metrics.regression import _check_reg_targets
-        # For models other than TBDT or TBRF, predict() doesn't accept extra arg of tb
-        y_pred = self.predict(X, tb=tb, realize_iter=realize_iter) if tb is not None else self.predict(X)
+        # For models other than TBDT or TBRF, predict() doesn't accept extra arg of tb.
+        # Don't accept bij_novelty operation other than limiting or None
+        if bij_novelty not in ('lim', 'limit', 'cap', None): bij_novelty = None
+        y_pred = self.predict(X, tb=tb,
+                              bij_novelty=bij_novelty) if tb is not None else self.predict(X)
         # XXX: Remove the check in 0.23
         y_type, _, _, _ = _check_reg_targets(y, y_pred, None)
         if y_type == 'continuous-multioutput':

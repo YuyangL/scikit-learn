@@ -266,8 +266,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
         # In tensor basis criterion, doesn't make sense to have less than 2 samples in a leaf node.
         # Because we want to at least find 2 samples alike and find an overdetermined unique set of 10 g.
         # Otherwise, if only 1 sample, then g is underdetermined from bij[6 x 1] and Tij[6 x 10] thus not unique
-        if self.tb_mode:
-            min_samples_leaf = max(2, min_samples_leaf)
+        # if self.tb_mode:
+        #     min_samples_leaf = max(2, min_samples_leaf)
 
         if isinstance(self.min_samples_split, (numbers.Integral, np.integer)):
             if not 2 <= self.min_samples_split:
@@ -507,7 +507,8 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                 # Extra kwarg of tb for predicting bij
                 tb=None,
                 # Make bij predictions realizable
-                realize_iter=None):
+                realize_iter=None,
+                bij_novelty=None):
         """Predict class or regression value for X.
 
         For a classification model, the predicted class for each sample in X is
@@ -573,8 +574,17 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         # Regression
         else:
+            # Manually remove bij novelty values outside [-1/3*10, 2/3*10]
+            if tb is not None:
+                if bij_novelty in ('excl', 'exclude'):
+                    proba[proba < -10/3.] = np.nan
+                    proba[proba > 20/3.] = np.nan
+                elif bij_novelty in ('lim', 'limit', 'cap'):
+                    proba[proba < -10/3.] = -10/3.
+                    proba[proba > 20/3.] = 20/3.
+
             if self.n_outputs_ == 1:
-                # If tb is provided, prediction of 1 output has shape (n_samples, 1, 1)
+                # If tb is provided, prediction of 1 output has shape (n_samples, 1, 1).
                 # This is relevant for RegressorChain()
                 return proba[:, 0] if tb is None else proba[:, 0, 0]
 

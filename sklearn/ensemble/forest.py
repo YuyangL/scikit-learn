@@ -157,7 +157,8 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
                  warm_start=False,
                  class_weight=None,
                  # Extra kwarg to do median prediction instead of mean of all estimators
-                 median_predict=False):
+                 median_predict=False,
+                 bij_novelty=None):
         super().__init__(
             base_estimator=base_estimator,
             n_estimators=n_estimators,
@@ -172,6 +173,13 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         self.class_weight = class_weight
         # Extra initialization
         self.median_predict = median_predict
+        # If not doing median prediction, then bij_novelty has to be either None or limiting
+        if not median_predict and bij_novelty not in ('lim', 'limit', 'cap', None):
+            warn('\nbij_novelty has be either "lim", "limit", "cap" or None if not doing median prediction!\n',
+                 stacklevel=2)
+            bij_novelty = None
+
+        self.bij_novelty=bij_novelty
 
     def apply(self, X):
         """Apply trees in the forest to X, return leaf indices.
@@ -431,7 +439,8 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
 def _accumulate_prediction(predict, X, out, lock,
                            # Extra tensor basis kwarg
                            tb=None,
-                           realize_iter=None):
+                           realize_iter=None,
+                           bij_novelty=None):
     """This is a utility function for joblib's Parallel.
 
     If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
@@ -444,6 +453,12 @@ def _accumulate_prediction(predict, X, out, lock,
                          # Extra kwarg
                          tb=tb,
                          realize_iter=realize_iter)
+    # Manually limit bij novelty values outside [-1/3*10, 2/3*10] to border.
+    # Only accept bij_novelty for limiting requests
+    if tb is not None and bij_novelty in ('limit', 'lim', 'cap'):
+        prediction[prediction < -10/3.] = -10/3.
+        prediction[prediction > 20/3.] = 20/3.
+
     with lock:
         # TODO: consider post-proc of prediction e.g. filter bad prediction
         if len(out) == 1:
@@ -456,7 +471,8 @@ def _accumulate_prediction(predict, X, out, lock,
 def _append_prediction(predict, X, out, tree_idx,
                        # Extra tensor basis kwarg
                        tb=None,
-                       realize_iter=None):
+                       realize_iter=None,
+                       bij_novelty=None):
     """This is a utility function for joblib's Parallel.
 
     If tensor basis tb of shape (n_samples, n_outputs, n_bases) is provided,
@@ -469,6 +485,11 @@ def _append_prediction(predict, X, out, tree_idx,
                          # Extra kwarg
                          tb=tb,
                          realize_iter=realize_iter)
+    # Manually remove bij novelty values outside [-1/3*10, 2/3*10].
+    # Only accepts bij_novelty exclusion requests
+    if tb is not None and bij_novelty in ('excl', 'exclude'):
+        prediction[prediction < -10/3.] = np.nan
+        prediction[prediction > 20/3.] = np.nan
 
     if len(out) == 1:
         out[0][..., tree_idx] = prediction
@@ -739,7 +760,8 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
                  verbose=0,
                  warm_start=False,
                  # Extra kwarg to do median prediction instead of mean prediction
-                 median_predict=False):
+                 median_predict=False,
+                 bij_novelty=None):
         super().__init__(
             base_estimator,
             n_estimators=n_estimators,
@@ -750,12 +772,14 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             random_state=random_state,
             verbose=verbose,
             warm_start=warm_start,
-            median_predict=median_predict)
+            median_predict=median_predict,
+            bij_novelty=bij_novelty)
 
     def predict(self, X,
                 # Extra tensor basis input if predicting bij
                 tb=None,
-                realize_iter=None):
+                realize_iter=None,
+                bij_novelty=None):
         """Predict regression target for X.
 
         The predicted regression target of an input sample is computed as the
@@ -816,7 +840,8 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
                      **_joblib_parallel_args(require="sharedmem"))(
                 delayed(_accumulate_prediction)(e.predict, X, [y_hat], lock,
                                                 # Extra kwarg
-                                                tb=tb, realize_iter=realize_iter)
+                                                tb=tb, realize_iter=realize_iter,
+                                                bij_novelty=bij_novelty)
                 for e in self.estimators_)
             y_hat /= len(self.estimators_)
         # Else if doing median prediction, use _append_prediction() instead, no lock required.
@@ -825,10 +850,11 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             Parallel(n_jobs=n_jobs, verbose=self.verbose,
                      **_joblib_parallel_args(require="sharedmem"))(
                     delayed(_append_prediction)(e.predict, X, [y_hat], i,
-                                                    # Extra kwarg
-                                                    tb=tb, realize_iter=realize_iter)
+                                                    # Extra kwargs
+                                                    tb=tb, realize_iter=realize_iter,
+                                                bij_novelty=bij_novelty)
                     for i, e in enumerate(self.estimators_))
-            y_hat = np.median(y_hat, axis=2, overwrite_input=True)
+            y_hat = np.nanmedian(y_hat, axis=2, overwrite_input=True)
 
         return y_hat
 
@@ -864,7 +890,8 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
                 p_estimator = estimator.predict(
                     X[unsampled_indices, :], check_input=False,
                 # Extra kwarg
-                tb=tb[unsampled_indices])
+                tb=tb[unsampled_indices],
+                bij_novelty=self.bij_novelty)
             # Else if tb is None, use default predict()
             else:
                 p_estimator = estimator.predict(
@@ -893,7 +920,7 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
         # Take the median of every sample and every output along 3rd axis, i.e. estimator axis
         if self.median_predict:
             # Here predictions should be shrinked from 3D to 2D since 3rd D of estimator is gone
-            predictions = np.median(predictions, axis=2, overwrite_input=True)
+            predictions = np.nanmedian(predictions, axis=2, overwrite_input=True)
         else:
             predictions /= n_predictions
 

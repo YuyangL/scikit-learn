@@ -394,7 +394,9 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
                    parameters, fit_params, return_train_score=False,
                    return_parameters=False, return_n_test_samples=False,
                    return_times=False, return_estimator=False,
-                   error_score='raise-deprecating'):
+                   error_score='raise-deprecating',
+                   # Extra kwarg
+                   bij_novelty=None):
     """Fit estimator and compute scores for a given dataset split.
 
     Parameters
@@ -567,11 +569,16 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
     else:
         fit_time = time.time() - start_time
         # _score will return dict if is_multimetric is True
-        test_scores = _score(estimator, X_test, y_test, scorer, is_multimetric, tb_test)
+        test_scores = _score(estimator, X_test, y_test, scorer, is_multimetric, tb_test,
+                             # Extra kwarg
+                             bij_novelty=bij_novelty)
         score_time = time.time() - start_time - fit_time
         if return_train_score:
             train_scores = _score(estimator, X_train, y_train, scorer,
-                                  is_multimetric, tb_train)
+                                  is_multimetric, tb_train,
+                                  # Extra kwarg
+                                  # TODO: not sure this is needed for train score
+                                  bij_novelty=bij_novelty)
     if verbose > 2:
         if is_multimetric:
             for scorer_name in sorted(test_scores):
@@ -605,22 +612,29 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
 
 def _score(estimator, X_test, y_test, scorer, is_multimetric=False,
            # Extra kwarg of test tensor basis input
-           tb_test=None):
+           tb_test=None,
+           bij_novelty=None):
     """Compute the score(s) of an estimator on a given test set.
 
     Will return a single float if is_multimetric is False and a dict of floats,
     if is_multimetric is True
     """
+    if bij_novelty not in ('lim', 'limit', 'cap', None):
+        warnings.warn('\nbij_novelty should be either "lim", "limit", "cap", or None!\n', stacklevel=2)
+        bij_novelty = None
+
     if is_multimetric:
         # Extra arg of tb_test
-        return _multimetric_score(estimator, X_test, y_test, scorer, tb_test)
+        return _multimetric_score(estimator, X_test, y_test, scorer, tb_test,
+                                  bij_novelty=bij_novelty)
     else:
         if y_test is None:
             score = scorer(estimator, X_test)
         else:
             # Extra arg of tb_test to feed estimator.score().
             # Here essentially _passthrough_scorer() from scorer.py is done
-            score = scorer(estimator, X_test, y_test, tb=tb_test)
+            score = scorer(estimator, X_test, y_test, tb=tb_test,
+                           bij_novelty=bij_novelty)
 
         if hasattr(score, 'item'):
             try:
@@ -639,7 +653,8 @@ def _score(estimator, X_test, y_test, scorer, is_multimetric=False,
 
 def _multimetric_score(estimator, X_test, y_test, scorers,
                        # Extra kwarg of test tensor basis input
-                       tb_test=None):
+                       tb_test=None,
+                       bij_novelty=None):
     """Return a dict of score for multimetric scoring"""
     scores = {}
 
@@ -649,7 +664,8 @@ def _multimetric_score(estimator, X_test, y_test, scorers,
         else:
             # Additional arg of tb_test to feed estimator.score().
             # Here essentially _passthrough_scorer() from scorer.py is done
-            score = scorer(estimator, X_test, y_test, tb=tb_test)
+            score = scorer(estimator, X_test, y_test, tb=tb_test,
+                           bij_novelty=bij_novelty)
 
         if hasattr(score, 'item'):
             try:
