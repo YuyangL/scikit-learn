@@ -574,14 +574,35 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         # Regression
         else:
-            # Manually remove bij novelty values outside [-1/3*10, 2/3*10]
-            if tb is not None:
+            # Manually remove/cap bij novelty values outside [-1/3*10, 2/3*10] for diagonal bij
+            # and [-1/2*10, 1/2*10] for off-diagonal bij
+            if tb is not None and bij_novelty in ('excl', 'exclude', 'lim', 'limit', 'cap'):
+                # Diagonal indices depending on full outputs or unique outputs
+                ii = (0, 4, 8) if proba.shape[1] == 9 else (0, 3, 5)
+                # Mask containing values depending on either removal or limitation
                 if bij_novelty in ('excl', 'exclude'):
-                    proba[proba < -10/3.] = np.nan
-                    proba[proba > 20/3.] = np.nan
+                    mask = (np.nan, np.nan, np.nan, np.nan)
                 elif bij_novelty in ('lim', 'limit', 'cap'):
-                    proba[proba < -10/3.] = -10/3.
-                    proba[proba > 20/3.] = 20/3.
+                    mask = (-5., 5., -10/3., 20/3.)
+
+                # Go through every output
+                proba_i = np.empty((proba.shape[1], 1))
+                for i in range(proba.shape[1]):
+                    proba_i = proba[:, i]
+                    # For off-diagonal bij, bound is [-0.5, 0.5],
+                    # excl. whatever > 10 times the bounds
+                    if i not in ii:
+                        proba_i[proba_i < -5.] = mask[0]
+                        proba_i[proba_i > 5.] = mask[1]
+                    # Else if diagonal bij, bound is [-1/3, 2/3]
+                    else:
+                        proba_i[proba_i < -10/3.] = mask[2]
+                        proba_i[proba_i > 20/3.] = mask[3]
+
+                    # Assign the masked array back and delete temporary proba_i array
+                    proba[:, i] = proba_i
+
+                del proba_i
 
             if self.n_outputs_ == 1:
                 # If tb is provided, prediction of 1 output has shape (n_samples, 1, 1).

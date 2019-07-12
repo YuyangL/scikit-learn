@@ -287,7 +287,7 @@ class BaseEstimator:
         try:
             state = super().__getstate__()
         except AttributeError:
-            print('\nBaseEstimator.__getstate__() -> self.__dict__.copy() ')
+            # print('\nBaseEstimator.__getstate__() -> self.__dict__.copy() ')
             state = self.__dict__.copy()
 
         if type(self).__module__.startswith('sklearn.'):
@@ -308,7 +308,7 @@ class BaseEstimator:
         try:
             super().__setstate__(state)
         except AttributeError:
-            print('\nBaseEstimator.__setstate__() -> self.__dict__.update(state) ')
+            # print('\nBaseEstimator.__setstate__() -> self.__dict__.update(state) ')
             self.__dict__.update(state)
 
     def _get_tags(self):

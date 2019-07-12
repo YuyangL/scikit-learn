@@ -449,15 +449,14 @@ def _accumulate_prediction(predict, X, out, lock,
     It can't go locally in ForestClassifier or ForestRegressor, because joblib
     complains that it cannot pickle it when placed there.
     """
+
+    # Limit bij prediction only if bij_novelty is in limitation mode
+    if bij_novelty not in ('lim', 'limit', 'cap'): bij_novelty = None
     prediction = predict(X, check_input=False,
-                         # Extra kwarg
+                         # Extra kwargs
                          tb=tb,
-                         realize_iter=realize_iter)
-    # Manually limit bij novelty values outside [-1/3*10, 2/3*10] to border.
-    # Only accept bij_novelty for limiting requests
-    if tb is not None and bij_novelty in ('limit', 'lim', 'cap'):
-        prediction[prediction < -10/3.] = -10/3.
-        prediction[prediction > 20/3.] = 20/3.
+                         realize_iter=realize_iter,
+                         bij_novelty=bij_novelty)
 
     with lock:
         # TODO: consider post-proc of prediction e.g. filter bad prediction
@@ -481,15 +480,13 @@ def _append_prediction(predict, X, out, tree_idx,
     It can't go locally in ForestClassifier or ForestRegressor, because joblib
     complains that it cannot pickle it when placed there.
     """
+
+    # bij outlier can either be set to NaN (preferred) or limit
     prediction = predict(X, check_input=False,
                          # Extra kwarg
                          tb=tb,
-                         realize_iter=realize_iter)
-    # Manually remove bij novelty values outside [-1/3*10, 2/3*10].
-    # Only accepts bij_novelty exclusion requests
-    if tb is not None and bij_novelty in ('excl', 'exclude'):
-        prediction[prediction < -10/3.] = np.nan
-        prediction[prediction > 20/3.] = np.nan
+                         realize_iter=realize_iter,
+                         bij_novelty=bij_novelty)
 
     if len(out) == 1:
         out[0][..., tree_idx] = prediction
@@ -1474,7 +1471,8 @@ class RandomForestRegressor(ForestRegressor):
                  # Realizability iterator on bij prediction
                  realize_iter=0,
                  # Whether do median prediction or mean prediction
-                 median_predict=False):
+                 median_predict=False,
+                 bij_novelty=None):
         super().__init__(
             base_estimator=DecisionTreeRegressor(),
             n_estimators=n_estimators,
@@ -1497,7 +1495,8 @@ class RandomForestRegressor(ForestRegressor):
             random_state=random_state,
             verbose=verbose,
             warm_start=warm_start,
-            median_predict=median_predict)
+            median_predict=median_predict,
+            bij_novelty=bij_novelty)
 
         self.criterion = criterion
         self.max_depth = max_depth
