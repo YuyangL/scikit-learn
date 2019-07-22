@@ -619,10 +619,6 @@ def _score(estimator, X_test, y_test, scorer, is_multimetric=False,
     Will return a single float if is_multimetric is False and a dict of floats,
     if is_multimetric is True
     """
-    if bij_novelty not in ('lim', 'limit', 'cap', None):
-        warnings.warn('\nbij_novelty should be either "lim", "limit", "cap", or None!\n', stacklevel=2)
-        bij_novelty = None
-
     if is_multimetric:
         # Extra arg of tb_test
         return _multimetric_score(estimator, X_test, y_test, scorer, tb_test,

@@ -1094,6 +1094,10 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
                                                                               # Extra kwarg
                                                                               bij_novelty=self.bij_novelty)
 
+        if self.bij_novelty in ('excl', 'exclude'):
+            warn('\nbij novelties are set to 0, i.e. no prediction, instead of NaN')
+            y_predict[y_predict == np.nan] = 0.
+
         # If in tensor basis mode, then y is multioutputs, calculate Frobenius norm for each sample
         # to collapse y from shape (n_samples, n_outputs) to (n_samples,)
         error_vect = np.abs(y_predict - y) if tb is None else np.linalg.norm(y_predict - y, axis=1)
@@ -1145,16 +1149,17 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
             # Sort the predictions
             sorted_idx = np.argsort(predictions, axis=1)
         else:
-            if bij_novelty not in ('lim', 'limit', 'cap', None):
-                warn('\nbij_novelty should be either "lim", "limit", "cap", or None!\n', stacklevel=2)
-                bij_novelty = None
-
             # predictions is 3D instead of 2D due to multioutputs.
             # Axis 1 is n_outputs, axis 2 is n_estimators
             predictions = np.empty((X.shape[0], tb.shape[1], limit))
             for i, est in enumerate(self.estimators_[:limit]):
                 predictions[..., i] = est.predict(X, tb=tb, realize_iter=realize_iter,
                                                   bij_novelty=bij_novelty)
+
+            if bij_novelty in ('excl', 'exclude'):
+                warn(
+                    '\nbij novelties are set to 0, i.e. no prediction, instead of NaN')
+                predictions[predictions == np.nan] = 0.
 
             # First collapse axis 1: n_outputs by calculating Frobenius norm,
             # then n_estimator becomes axis 1, sort along it for every sample

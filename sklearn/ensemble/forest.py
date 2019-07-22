@@ -173,12 +173,6 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
         self.class_weight = class_weight
         # Extra initialization
         self.median_predict = median_predict
-        # If not doing median prediction, then bij_novelty has to be either None or limiting
-        if not median_predict and bij_novelty not in ('lim', 'limit', 'cap', None):
-            warn('\nbij_novelty has be either "lim", "limit", "cap" or None if not doing median prediction!\n',
-                 stacklevel=2)
-            bij_novelty = None
-
         self.bij_novelty=bij_novelty
 
     def apply(self, X):
@@ -449,17 +443,16 @@ def _accumulate_prediction(predict, X, out, lock,
     It can't go locally in ForestClassifier or ForestRegressor, because joblib
     complains that it cannot pickle it when placed there.
     """
-
-    # Limit bij prediction only if bij_novelty is in limitation mode
-    if bij_novelty not in ('lim', 'limit', 'cap'): bij_novelty = None
     prediction = predict(X, check_input=False,
                          # Extra kwargs
                          tb=tb,
                          realize_iter=realize_iter,
                          bij_novelty=bij_novelty)
+    if bij_novelty in ('excl', 'exclude'):
+        warn('\nbij novelties are set to 0, i.e. no prediction, instead of NaN for prediction mean')
+        prediction[prediction == np.nan] = 0.
 
     with lock:
-        # TODO: consider post-proc of prediction e.g. filter bad prediction
         if len(out) == 1:
             out[0] += prediction
         else:
@@ -927,6 +920,9 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             self.oob_prediction_ = \
                 self.oob_prediction_.reshape((n_samples, ))
 
+        print('\nIf bij novelties are set to NaN, they are set to 0, i.e. no prediction, for OOB R2 score to compute '
+              'properly.')
+        predictions[predictions == np.nan] = 0.
         self.oob_score_ = 0.0
 
         for k in range(self.n_outputs_):

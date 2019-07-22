@@ -418,10 +418,14 @@ class RegressorMixin:
         from .metrics import r2_score
         from .metrics.regression import _check_reg_targets
         # For models other than TBDT or TBRF, predict() doesn't accept extra arg of tb.
-        # Don't accept bij_novelty operation other than limiting or None
-        if bij_novelty not in ('lim', 'limit', 'cap', None): bij_novelty = None
         y_pred = self.predict(X, tb=tb,
                               bij_novelty=bij_novelty) if tb is not None else self.predict(X)
+        if bij_novelty in ('excl', 'exclude'):
+            print('\nSince bij novelties are set to NaN, they are set to 0, i.e. no prediction, for R2 score to '
+                  'compute '
+                  'properly.')
+            y_pred[y_pred == np.nan] = 0.
+
         # XXX: Remove the check in 0.23
         y_type, _, _, _ = _check_reg_targets(y, y_pred, None)
         if y_type == 'continuous-multioutput':
