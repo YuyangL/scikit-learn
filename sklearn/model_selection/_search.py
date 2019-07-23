@@ -704,6 +704,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
                                                        **fit_and_score_kwargs)
                                for parameters, (train, test)
                                in product(candidate_params,
+                                          # This yields train and test indices.
+                                          # y input is probably not necessary
                                           cv.split(X, y, groups)))
 
                 if len(out) < 1:

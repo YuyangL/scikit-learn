@@ -496,9 +496,11 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
     # Other supplied arrays to estimator.fit() are limited to train indices.
-    # However, exclude this step for "tb" as it's train-test split below
+    # However, exclude this step for "tb" as it's train-test split below.
+    # None means exception won't be raised and None is returned as tb
+    tb = fit_params.pop('tb', None)
     fit_params = {k: _index_param_value(X, v, train)
-                  for k, v in fit_params.items() if k != "tb"}
+                  for k, v in fit_params.items()} if len(fit_params) > 0 else {}
 
     train_scores = {}
     if parameters is not None:
@@ -507,9 +509,9 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
     start_time = time.time()
 
     # If "tb" is in fit_params, i.e. tb is provided, then get tb_train/test for CV too
-    if "tb" in fit_params.keys():
-        X_train, y_train, tb_train = _safe_split(estimator, X, y, train, tb=fit_params["tb"])
-        X_test, y_test, tb_test = _safe_split(estimator, X, y, test, train, tb=fit_params["tb"])
+    if tb is not None:
+        X_train, y_train, tb_train = _safe_split(estimator, X, y, train, tb=tb)
+        X_test, y_test, tb_test = _safe_split(estimator, X, y, test, train, tb=tb)
     else:
         X_train, y_train = _safe_split(estimator, X, y, train)
         X_test, y_test = _safe_split(estimator, X, y, test, train)
@@ -523,11 +525,8 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
             estimator.fit(X_train, **fit_params)
         else:
             # Provide tb_train too if it exists
-            if "tb" in fit_params.keys():
-                # Remove "tb" key from fit_params and supply it to fit() later manually.
-                # None means exception won't be raised. Has not effect since "tb" should be there.
-                fit_params.pop("tb", None)
-                estimator.fit(X_train, y_train, tb_train, **fit_params)
+            if tb_train is not None:
+                estimator.fit(X_train, y_train, tb=tb_train, **fit_params)
             else:
                 estimator.fit(X_train, y_train, **fit_params)
 
@@ -569,15 +568,16 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
     else:
         fit_time = time.time() - start_time
         # _score will return dict if is_multimetric is True
-        test_scores = _score(estimator, X_test, y_test, scorer, is_multimetric, tb_test,
-                             # Extra kwarg
+        test_scores = _score(estimator, X_test, y_test, scorer, is_multimetric,
+                             # Extra kwargs
+                             tb_test=tb_test,
                              bij_novelty=bij_novelty)
         score_time = time.time() - start_time - fit_time
         if return_train_score:
             train_scores = _score(estimator, X_train, y_train, scorer,
-                                  is_multimetric, tb_train,
-                                  # Extra kwarg
-                                  # TODO: not sure this is needed for train score
+                                  is_multimetric,
+                                  # Extra kwargs
+                                  tb_test=tb_train,
                                   bij_novelty=bij_novelty)
     if verbose > 2:
         if is_multimetric:
@@ -893,22 +893,16 @@ def _fit_and_predict(estimator, X, y, train, test, verbose, fit_params,
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
     # Check if tb key is stored in fit_params, if so, the estimator is TBDT
-    if 'tb' in fit_params.keys():
-        tb = fit_params['tb']
-        tb_mode = True
-        # Remove tb key-value pair in fit_params and later supply manually in fit()
-        del fit_params['tb']
-    else:
-        tb_mode = False
-
+    tb = fit_params.pop('tb', None)
     # Some other fit parameter arrays ared indexed according to X, but tb which we split manually like y
     fit_params = {k: _index_param_value(X, v, train)
-                  for k, v in fit_params.items()}
+                  for k, v in fit_params.items()} if len(fit_params) > 0 else {}
 
     # If in tensor basis mode, then split tb as well
-    if not tb_mode:
+    if tb is None:
         X_train, y_train = _safe_split(estimator, X, y, train)
         X_test, _ = _safe_split(estimator, X, y, test, train)
+        tb_train, tb_test = None, None
     else:
         X_train, y_train, tb_train = _safe_split(estimator, X, y, train, tb=tb)
         X_test, _, tb_test = _safe_split(estimator, X, y, test, train, tb=tb)
@@ -917,14 +911,14 @@ def _fit_and_predict(estimator, X, y, train, test, verbose, fit_params,
         estimator.fit(X_train, **fit_params)
     else:
         # Additional tb input in case of TBDT
-        if not tb_mode:
+        if tb_train is None:
             estimator.fit(X_train, y_train, **fit_params)
         else:
             estimator.fit(X_train, y_train, tb=tb_train, **fit_params)
 
     func = getattr(estimator, method)
     # If in tb mode, supply tb_test to predict() too
-    predictions = func(X_test) if not tb_mode else func(X_test, tb=tb_test)
+    predictions = func(X_test) if tb_test is None else func(X_test, tb=tb_test)
     if method in ['decision_function', 'predict_proba', 'predict_log_proba']:
         if isinstance(predictions, list):
             predictions = [_enforce_prediction_order(
