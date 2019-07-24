@@ -1500,6 +1500,7 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                         else:  # regular estimator whose input checking failed
                             raise
 
+                # This is simply mean y constant for all samples in ls
                 raw_predictions = \
                     self.loss_.get_init_raw_predictions(X, self.init_)
 
