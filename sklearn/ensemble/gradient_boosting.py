@@ -1174,7 +1174,16 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                  random_state, alpha=0.9, verbose=0, max_leaf_nodes=None,
                  warm_start=False, presort='auto',
                  validation_fraction=0.1, n_iter_no_change=None,
-                 tol=1e-4):
+                 tol=1e-4,
+                 # Extra kwargs
+                 tb_verbose=False,
+                 split_finder='brute',
+                 split_verbose=False,
+                 alpha_g_split=0.,
+                 g_cap=None,
+                 realize_iter=0,
+                 # [DEPRECATED]
+                 alpha_g_fit=0.):
 
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -1198,9 +1207,19 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         self.validation_fraction = validation_fraction
         self.n_iter_no_change = n_iter_no_change
         self.tol = tol
+        # Extra assignments
+        self.tb_verbose = tb_verbose
+        self.split_finder = split_finder
+        self.split_verbose = split_verbose
+        self.alpha_g_fit = alpha_g_fit
+        self.alpha_g_split = alpha_g_split
+        self.g_cap = g_cap
+        self.realize_iter = realize_iter
 
     def _fit_stage(self, i, X, y, raw_predictions, sample_weight, sample_mask,
-                   random_state, X_idx_sorted, X_csc=None, X_csr=None):
+                   random_state, X_idx_sorted, X_csc=None, X_csr=None,
+                   # Extra kwarg
+                   tb=None):
         """Fit another stage of ``n_classes_`` trees to the boosting model. """
 
         assert sample_mask.dtype == np.bool
@@ -1213,10 +1232,14 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         # iteration i - 1.
         raw_predictions_copy = raw_predictions.copy()
 
+        # Recall loss.K = 1 for regression
         for k in range(loss.K):
+            # This is for classification only
             if loss.is_multi_class:
                 y = np.array(original_y == k, dtype=np.float64)
 
+            # n_outputs 2D array if multioutputs.
+            # k and sample_weight have no effect in 'ls' loss
             residual = loss.negative_gradient(y, raw_predictions_copy, k=k,
                                               sample_weight=sample_weight)
 
@@ -1233,7 +1256,16 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                 max_features=self.max_features,
                 max_leaf_nodes=self.max_leaf_nodes,
                 random_state=random_state,
-                presort=self.presort)
+                presort=self.presort,
+                # Extra kwargs
+                tb_verbose=self.tb_verbose,
+                split_finder=self.split_finder,
+                split_verbose=self.split_verbose,
+                alpha_g_fit=self.alpha_g_fit,
+                alpha_g_split=self.alpha_g_split,
+                g_cap=self.g_cap,
+                realize_iter=self.realize_iter
+            )
 
             if self.subsample < 1.0:
                 # no inplace multiplication!
@@ -1241,12 +1273,19 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
 
             X = X_csr if X_csr is not None else X
             tree.fit(X, residual, sample_weight=sample_weight,
-                     check_input=False, X_idx_sorted=X_idx_sorted)
+                     check_input=False, X_idx_sorted=X_idx_sorted,
+                     # Extra kwarg
+                     tb=tb)
 
-            # update tree leaves
+            # update tree leaves.
+            # raw_predictions are updated here with the new tree's residual prediction.
+            # Shape of raw_predictions for multioutputs is still (n_samples, n_outputs),
+            # otherwise (n_samples, 1) in regression
             loss.update_terminal_regions(
                 tree.tree_, X, y, residual, raw_predictions, sample_weight,
-                sample_mask, learning_rate=self.learning_rate, k=k)
+                sample_mask, learning_rate=self.learning_rate, k=k,
+            # Extra kwarg
+            tb=tb)
 
             # add tree to ensemble
             self.estimators_[i, k] = tree
@@ -1392,7 +1431,9 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         """Check that the estimator is initialized, raising an error if not."""
         check_is_fitted(self, 'estimators_')
 
-    def fit(self, X, y, sample_weight=None, monitor=None):
+    def fit(self, X, y, sample_weight=None, monitor=None,
+            # Extra kwarg
+            tb=None):
         """Fit the gradient boosting model.
 
         Parameters
@@ -1447,16 +1488,35 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         check_consistent_length(X, y, sample_weight)
 
         y = check_array(y, accept_sparse='csc', ensure_2d=False, dtype=None)
-        y = column_or_1d(y, warn=True)
+        # Skip 1D y array check if in tensor basis mode as y will be multioutputs
+        # y = column_or_1d(y, warn=True)
+
+        # self.n_classes_ is set to 1 here.
+        # It is used to differentiate classification loss and regression loss.
+        # It's also used to set self.loss_.K
         y = self._validate_y(y, sample_weight)
+        # Dimension of y, if 2, then it means y is multioutput
+        self.dim_y = len(y.shape)
+        self.n_outputs = y.shape[1] if self.dim_y > 1 else 1
 
         if self.n_iter_no_change is not None:
             stratify = y if is_classifier(self) else None
-            X, X_val, y, y_val, sample_weight, sample_weight_val = (
-                train_test_split(X, y, sample_weight,
-                                 random_state=self.random_state,
-                                 test_size=self.validation_fraction,
-                                 stratify=stratify))
+            if tb is None:
+                X, X_val, y, y_val, sample_weight, sample_weight_val = (
+                    train_test_split(X, y, sample_weight,
+                                     random_state=self.random_state,
+                                     test_size=self.validation_fraction,
+                                     stratify=stratify))
+                # Validation set of Tij is also None as Tij
+                tb_val = None
+            # Else, additional train-validation data split for Tij if supplied
+            else:
+                X, X_val, y, y_val, sample_weight, sample_weight_val, tb, tb_val = (
+                        train_test_split(X, y, sample_weight, tb,
+                                         random_state=self.random_state,
+                                         test_size=self.validation_fraction,
+                                         stratify=stratify))
+
             if is_classifier(self):
                 if self.n_classes_ != np.unique(y).shape[0]:
                     # We choose to error here. The problem is that the init
@@ -1469,20 +1529,32 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                         'seed.'
                     )
         else:
-            X_val = y_val = sample_weight_val = None
+            # Additional tb_val set to None, i.e. no validation set for early stop
+            X_val = y_val = sample_weight_val = tb_val = None
 
         self._check_params()
 
         if not self._is_initialized():
             # init state
+            # if self.init is None, self.init_ is set to self.loss_.init_estimator() that has fit() and predict()
             self._init_state()
 
             # fit initial model and initialize raw predictions
             if self.init_ == 'zero':
-                raw_predictions = np.zeros(shape=(X.shape[0], self.loss_.K),
-                                           dtype=np.float64)
+                if self.dim_y == 1:
+                    # self.loss_.K is equal to self.n_classes_ which is 1 for regression
+                    raw_predictions = np.zeros(shape=(X.shape[0], self.loss_.K),
+                                               dtype=np.float64)
+                # Else if multioutputs, raw_predictions has the same size as 2D n_outputs y
+                else:
+                    raw_predictions = np.zeros(shape=(X.shape[0], y.shape[1]),
+                                               dtype=np.float64)
+
             else:
                 # XXX clean this once we have a support_sample_weight tag
+                # self.init_ aka self.loss_.init_estimator() will use DummyRegressor()
+                # and update self.constant_ as the mean (for 'ls' loss) of y.
+                # For multioutputs y in tensor basis mode, self.init_.n_outputs_ is set to y.shape[1]
                 if sample_weight_is_none:
                     self.init_.fit(X, y)
                 else:
@@ -1500,7 +1572,21 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                         else:  # regular estimator whose input checking failed
                             raise
 
-                # This is simply mean y constant for all samples in ls
+                # # If self.init_.constant_ has been calculated as mean (for 'ls' loss) of y
+                # # while y is multioutputs in tensor basis mode,
+                # # take Frobenius norm so that it's a float
+                # if self.dim_y > 1:
+                #     self.init_.constant_ = np.linalg.norm(self.init_.constant_)
+                #     # Since Frobenius norm is already done for self.init_.constant_,
+                #     # simply assign self.init_.constant_ to single output raw_predictions
+                #     raw_predictions = np.full(X.shape[0], self.init_.constant_,
+                #                               dtype=np.array(self.init_.constant_).dtype)
+                # else:
+
+                # Recall self.init_ is just DummyRegressor() if self.init is None,
+                # then get_init_raw_prediction() calls DummyRegressor.predict(X).
+                # If multioutputs, for output j, raw_predictions[:, j] is always self.init_.constant[j],
+                # which is mean of y[:, j]
                 raw_predictions = \
                     self.loss_.get_init_raw_predictions(X, self.init_)
 
@@ -1508,7 +1594,6 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
 
             # The rng state must be preserved if warm_start is True
             self._rng = check_random_state(self.random_state)
-
         else:
             # add more estimators to fitted model
             # invariant: warm_start = True
@@ -1523,7 +1608,12 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
             # below) are more constrained than fit. It accepts only CSR
             # matrices.
             X = check_array(X, dtype=DTYPE, order="C", accept_sparse='csr')
-            raw_predictions = self._raw_predict(X)
+            raw_predictions = self._raw_predict(X,
+                                                # Extra kwargs
+                                                tb=tb,
+                                                # realize_iter is not provided through kwarg but self
+                                                realize_iter=None)
+            # Expand relevant arrays to fit more estimators
             self._resize_state()
 
         if self.presort is True and issparse(X):
@@ -1544,7 +1634,10 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         # fit the boosting stages
         n_stages = self._fit_stages(
             X, y, raw_predictions, sample_weight, self._rng, X_val, y_val,
-            sample_weight_val, begin_at_stage, monitor, X_idx_sorted)
+            sample_weight_val, begin_at_stage, monitor, X_idx_sorted,
+        # Extra kwargs
+        tb=tb,
+        tb_val=tb_val)
 
         # change shape of arrays after fit (early-stopping or additional ests)
         if n_stages != self.estimators_.shape[0]:
@@ -1558,7 +1651,10 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
 
     def _fit_stages(self, X, y, raw_predictions, sample_weight, random_state,
                     X_val, y_val, sample_weight_val,
-                    begin_at_stage=0, monitor=None, X_idx_sorted=None):
+                    begin_at_stage=0, monitor=None, X_idx_sorted=None,
+                    # Extra kwargs
+                    tb=None,
+                    tb_val=None):
         """Iteratively fits the stages.
 
         For each stage it computes the progress (OOB, train score)
@@ -1570,6 +1666,7 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         do_oob = self.subsample < 1.0
         sample_mask = np.ones((n_samples, ), dtype=np.bool)
         n_inbag = max(1, int(self.subsample * n_samples))
+        # The loss function object, for tensor basis mode, should be 'ls' loss
         loss_ = self.loss_
 
         # Set min_weight_leaf from min_weight_fraction_leaf
@@ -1586,11 +1683,12 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         X_csc = csc_matrix(X) if issparse(X) else None
         X_csr = csr_matrix(X) if issparse(X) else None
 
+        # This is for early stop
         if self.n_iter_no_change is not None:
             loss_history = np.full(self.n_iter_no_change, np.inf)
             # We create a generator to get the predictions for X_val after
             # the addition of each successive stage
-            y_val_pred_iter = self._staged_raw_predict(X_val)
+            y_val_pred_iter = self._staged_raw_predict(X_val, tb=tb_val)
 
         # perform boosting iterations
         i = begin_at_stage
@@ -1600,18 +1698,25 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
             if do_oob:
                 sample_mask = _random_sample_mask(n_samples, n_inbag,
                                                   random_state)
-                # OOB score before adding this stage
+                # OOB score before adding this stage.
+                # Recall loss_ is a loss function object, this calls loss_.__call__().
+                # Frobenius norm is done here for multioutputs
                 old_oob_score = loss_(y[~sample_mask],
                                       raw_predictions[~sample_mask],
                                       sample_weight[~sample_mask])
 
             # fit next stage of trees
+            # raw_prediction has shape (n_samples, n_outputs) for multioutputs otherwise (n_samples, 1) in regression
             raw_predictions = self._fit_stage(
                 i, X, y, raw_predictions, sample_weight, sample_mask,
-                random_state, X_idx_sorted, X_csc, X_csr)
+                random_state, X_idx_sorted, X_csc, X_csr,
+            # Extra kwarg
+            tb=tb)
 
             # track deviance (= loss)
             if do_oob:
+                # Again, calling loss_.__call__() that calculates MSE.
+                # For multioutputs, Frobenius norm is done on (y_i - pred_i) before MSE
                 self.train_score_[i] = loss_(y[sample_mask],
                                              raw_predictions[sample_mask],
                                              sample_weight[sample_mask])
@@ -1627,6 +1732,7 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                 verbose_reporter.update(i, self)
 
             if monitor is not None:
+                # TODO: what's monitor and what's locals()?
                 early_stopping = monitor(i, self, locals())
                 if early_stopping:
                     break
@@ -1635,7 +1741,8 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
             # validation set (X_val, y_val), if n_iter_no_change is set
             if self.n_iter_no_change is not None:
                 # By calling next(y_val_pred_iter), we get the predictions
-                # for X_val after the addition of the current stage
+                # for X_val after the addition of the current stage.
+                # Again, Frobenius norm is done before MSE for multioutputs
                 validation_loss = loss_(y_val, next(y_val_pred_iter),
                                         sample_weight_val)
 
@@ -1653,28 +1760,48 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
         raise NotImplementedError()
 
     def _raw_predict_init(self, X):
-        """Check input and compute raw predictions of the init estimtor."""
+        """Check input and compute raw predictions of the init estimator."""
         self._check_initialized()
         X = self.estimators_[0, 0]._validate_X_predict(X, check_input=True)
         if X.shape[1] != self.n_features_:
             raise ValueError("X.shape[1] should be {0:d}, not {1:d}.".format(
                 self.n_features_, X.shape[1]))
         if self.init_ == 'zero':
-            raw_predictions = np.zeros(shape=(X.shape[0], self.loss_.K),
-                                       dtype=np.float64)
+            if self.dim_y == 1:
+                # If single output, raw_predictions has shape (n_samples, 1)
+                raw_predictions = np.zeros(shape=(X.shape[0], self.loss_.K),
+                                           dtype=np.float64)
+            # If multioutputs, raw_predictions has the same shape as y, (n_samples, n_outputs)
+            else:
+                raw_predictions = np.zeros(shape=(X.shape[0], self.n_outputs),
+                                           dtype=np.float64)
+
+        # Else if selt.init is not 'zero', e.g. None, then self.init_ is a fitted DummyRegressor()
         else:
+            # raw_predictions's shape stays with y automatically
             raw_predictions = self.loss_.get_init_raw_predictions(
                 X, self.init_).astype(np.float64)
         return raw_predictions
 
-    def _raw_predict(self, X):
+    def _raw_predict(self, X,
+                     # Extra kwargs
+                     tb=None,
+                     realize_iter=0):
         """Return the sum of the trees raw predictions (+ init estimator)."""
+        # raw_predictions after _raw_predict_init() is just a constant aka offset
         raw_predictions = self._raw_predict_init(X)
-        predict_stages(self.estimators_, X, self.learning_rate,
-                       raw_predictions)
+        # bij instead of g will be returned if Tij is supplied while in tensor basis mode
+        raw_predictions = predict_stages(self.estimators_, X, self.learning_rate,
+                       raw_predictions,
+                       n_outputs=self.n_outputs,
+                       tb=tb,
+                                         realize_iter=realize_iter)
         return raw_predictions
 
-    def _staged_raw_predict(self, X):
+    def _staged_raw_predict(self, X,
+                            # Extra kwarg for bij prediction
+                            tb=None,
+                            realize_iter=0):
         """Compute raw predictions of ``X`` for each iteration.
 
         This method allows monitoring (i.e. determine error on testing set)
@@ -1696,10 +1823,16 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
             ``k == 1``, otherwise ``k==n_classes``.
         """
         X = check_array(X, dtype=DTYPE, order="C", accept_sparse='csr')
+        # Shape (n_samples, n_outputs) if multiouputs, otherwise (n_samples, 1)
         raw_predictions = self._raw_predict_init(X)
+        # Go through each estimator sequentially
         for i in range(self.estimators_.shape[0]):
-            predict_stage(self.estimators_, i, X, self.learning_rate,
-                          raw_predictions)
+            raw_predictions = predict_stage(self.estimators_, i, X, self.learning_rate,
+                          raw_predictions,
+                          # Extra kwargs
+                          n_outputs=self.n_outputs,
+                          tb=tb,
+                                            realize_iter=realize_iter)
             yield raw_predictions.copy()
 
     @property
@@ -2497,7 +2630,17 @@ class GradientBoostingRegressor(BaseGradientBoosting, RegressorMixin):
                  min_impurity_split=None, init=None, random_state=None,
                  max_features=None, alpha=0.9, verbose=0, max_leaf_nodes=None,
                  warm_start=False, presort='auto', validation_fraction=0.1,
-                 n_iter_no_change=None, tol=1e-4):
+                 n_iter_no_change=None, tol=1e-4,
+                 # Extra kwargs
+                 tb_verbose=False,
+                 split_finder='brute',
+                 split_verbose=False,
+                 alpha_g_split=0.,
+                 g_cap=None,
+                 realize_iter=0,
+                 # [DEPRECATED]
+                 alpha_g_fit=0.
+                 ):
 
         super().__init__(
             loss=loss, learning_rate=learning_rate, n_estimators=n_estimators,
@@ -2511,9 +2654,22 @@ class GradientBoostingRegressor(BaseGradientBoosting, RegressorMixin):
             random_state=random_state, alpha=alpha, verbose=verbose,
             max_leaf_nodes=max_leaf_nodes, warm_start=warm_start,
             presort=presort, validation_fraction=validation_fraction,
-            n_iter_no_change=n_iter_no_change, tol=tol)
+            n_iter_no_change=n_iter_no_change, tol=tol,
+            # Extra kwargs
+            tb_verbose=tb_verbose,
+            split_finder=split_finder,
+            split_verbose=split_verbose,
+            alpha_g_split=alpha_g_split,
+            g_cap=g_cap,
+            realize_iter=realize_iter,
+            # [DEPRECATED]
+            alpha_g_fit=alpha_g_fit
+        )
 
-    def predict(self, X):
+    def predict(self, X,
+                # Extra kwargs
+                tb=None,
+                realize_iter=None):
         """Predict regression target for X.
 
         Parameters
@@ -2529,10 +2685,26 @@ class GradientBoostingRegressor(BaseGradientBoosting, RegressorMixin):
             The predicted values.
         """
         X = check_array(X, dtype=DTYPE, order="C", accept_sparse='csr')
+        # If realize_iter is manually provided e.g. in predict() after training, use it.
+        # Otherwise, use innate self.realize_iter
+        realize_iter_final = realize_iter if realize_iter is not None else self.realize_iter
+        if realize_iter_final < 0: realize_iter_final = 0
         # In regression we can directly return the raw value from the trees.
-        return self._raw_predict(X).ravel()
+        if self.n_outputs == 1:
+            return self._raw_predict(X,
+                                     # Extra kwargs
+                                     tb=tb,
+                                     realize_iter=realize_iter_final).ravel()
+        else:
+            return self._raw_predict(X,
+                                     # Extra kwargs
+                                     tb=tb,
+                                     realize_iter=realize_iter_final)
 
-    def staged_predict(self, X):
+    def staged_predict(self, X,
+                       # Extra kwargs
+                       tb=None,
+                       realize_iter=None):
         """Predict regression target at each stage for X.
 
         This method allows monitoring (i.e. determine error on testing set)
@@ -2550,7 +2722,16 @@ class GradientBoostingRegressor(BaseGradientBoosting, RegressorMixin):
         y : generator of array of shape (n_samples,)
             The predicted value of the input samples.
         """
-        for raw_predictions in self._staged_raw_predict(X):
+
+        # If realize_iter is manually provided e.g. in predict() after training, use it.
+        # Otherwise, use innate self.realize_iter
+        realize_iter_final = realize_iter if realize_iter is not None else self.realize_iter
+        if realize_iter_final < 0: realize_iter_final = 0
+        # Go through each stage/estimator
+        for raw_predictions in self._staged_raw_predict(X,
+                                                        # Extra kwargs
+                                                        tb=tb,
+                                                        realize_iter=realize_iter_final):
             yield raw_predictions.ravel()
 
     def apply(self, X):

@@ -23,6 +23,8 @@ from ..tree._tree cimport Tree
 from ..tree._tree cimport DTYPE_t
 from ..tree._tree cimport SIZE_t
 from ..tree._tree cimport INT32_t
+# Import _makeRealizable() from _tree.pyx
+from ..tree._tree cimport _makeRealizable
 from ..tree._utils cimport safe_realloc
 
 ctypedef np.int32_t int32
@@ -89,6 +91,8 @@ cdef void _predict_regression_tree_inplace_fast_dense(DTYPE_t *X,
     """
     cdef Py_ssize_t i
     cdef Node *node
+    # Compare this to tree_._apply_dense(), the return out should be 10 g in tensor basis mode,
+    # or n outputs in multioutputs
     for i in range(n_samples):
         node = root_node
         # While node not a leaf
@@ -97,6 +101,12 @@ cdef void _predict_regression_tree_inplace_fast_dense(DTYPE_t *X,
                 node = root_node + node.left_child
             else:
                 node = root_node + node.right_child
+
+        # out is a pointer to leaf y data, so out[i] is the start leaf y value of sample i,
+        # while out[i:(i + K)] should contain each leaf y output value in multioutputs for sample i.
+        # value is also a pointer to array of shape (node_count, n_outputs, max_n_classes).
+        # (node - root_node) is difference between two pointers means number of elements of the type
+        # that would fit between the targets of the two pointers.
         out[i * K + k] += scale * value[node - root_node]
 
 def _predict_regression_tree_stages_sparse(np.ndarray[object, ndim=2] estimators,
@@ -188,15 +198,20 @@ def _predict_regression_tree_stages_sparse(np.ndarray[object, ndim=2] estimators
     free(values)
 
 
-def predict_stages(np.ndarray[object, ndim=2] estimators,
+cpdef np.ndarray[float64, ndim=2] predict_stages(np.ndarray[object, ndim=2] estimators,
                    object X, double scale,
-                   np.ndarray[float64, ndim=2] out):
+                   np.ndarray[float64, ndim=2] out,
+                   # Extra kwargs
+                   int n_outputs=1,
+                   np.ndarray[float64, ndim=3] tb=None,
+                                                 Py_ssize_t realize_iter=0):
     """Add predictions of ``estimators`` to ``out``.
+    out will be inplace updated only if tb is None.
 
     Each estimator is scaled by ``scale`` before its prediction
     is added to ``out``.
     """
-    cdef Py_ssize_t i
+    cdef Py_ssize_t i, j
     cdef Py_ssize_t k
     cdef Py_ssize_t n_estimators = estimators.shape[0]
     cdef Py_ssize_t K = estimators.shape[1]
@@ -213,30 +228,89 @@ def predict_stages(np.ndarray[object, ndim=2] estimators,
                              " got {}".format(type(X)))
 
         for i in range(n_estimators):
+            # Again, K is 1 for regression for both single and multioutputs
             for k in range(K):
                 tree = estimators[i, k].tree_
 
-                # avoid buffer validation by casting to ndarray
-                # and get data pointer
-                # need brackets because of casting operator priority
-                _predict_regression_tree_inplace_fast_dense(
-                    <DTYPE_t*> (<np.ndarray> X).data,
-                    tree.nodes, tree.value,
-                    scale, k, K, X.shape[0], X.shape[1],
-                    <float64 *> (<np.ndarray> out).data)
+                if n_outputs == 1:
+                    # avoid buffer validation by casting to ndarray
+                    # and get data pointer
+                    # need brackets because of casting operator priority
+                    _predict_regression_tree_inplace_fast_dense(
+                        <DTYPE_t*> (<np.ndarray> X).data,
+                        tree.nodes, tree.value,
+                        scale, k, K, X.shape[0], X.shape[1],
+                        <float64 *> (<np.ndarray> out).data)
+                # If multioutputs, replace K with n_outputs
+                else:
+                    _predict_regression_tree_inplace_fast_dense(
+                        <DTYPE_t*> (<np.ndarray> X).data,
+                        tree.nodes, tree.value,
+                        scale, k, n_outputs, X.shape[0], X.shape[1],
+                        <float64 *> (<np.ndarray> out).data)
+
                 ## out += scale * tree.predict(X).reshape((X.shape[0], 1))
 
+        # After all boosts, if Tij is supplied, calculate bij at each sample by
+        # bij = sum^(n_bases)[Tij*sum^(n_estimator)(g)],
+        # where g is out and out becomes bij after
+        if tb is not None:
+            print("\nTensor basis is provided, the predictions are bij with {} realizability iterations. ".format(
+                    realize_iter))
+            # Go through each sample
+            for i in range(X.shape[1]):
+                # For each sample, go through each component
+                for j in range(tb.shape[1]):
+                    # bij at sample i = Tij[n_outputs x n_bases]*g[n_basis x 1] at sample i
+                    # Inplace update only works with += / *= / /= /-= and not for number or string
+                    out[i, j] = np.dot(tb[i, j], out[i])
 
-def predict_stage(np.ndarray[object, ndim=2] estimators,
+            # Since bij's n_outputs should <= n_bases, remove the last leftover columns as out (was g) becomes bij
+            out = out[:, :tb.shape[1]]
+            # Iterate to shift unrealizable bij to realizable
+            for i in range(realize_iter):
+                out = _makeRealizable(out)
+
+    # Since out's update when Tij is supplied is not inplace, return it explicitly
+    return out
+
+
+cpdef np.ndarray[float64, ndim=2] predict_stage(np.ndarray[object, ndim=2] estimators,
                   int stage,
                   object X, double scale,
-                  np.ndarray[float64, ndim=2] out):
+                  np.ndarray[float64, ndim=2] out,
+                  # Extra kwarg for multioutputs
+                  int n_outputs=1,
+                  np.ndarray[float64, ndim=3] tb=None,
+                                                Py_ssize_t realize_iter=0):
     """Add predictions of ``estimators[stage]`` to ``out``.
+    out will be inplace updated. If in tensor basis mode, out needs to be updated and returned explicitly.
 
     Each estimator in the stage is scaled by ``scale`` before
     its prediction is added to ``out``.
     """
-    return predict_stages(estimators[stage:stage + 1], X, scale, out)
+    # Inplace update of out
+    out = predict_stages(estimators[stage:stage + 1], X, scale, out,
+                   # Extra kwargs
+                   n_outputs=n_outputs,
+                   tb=tb,
+                         realize_iter=realize_iter)
+
+    # cdef Py_ssize_t i, j
+    # if tb is not None:
+    #     # Go through each sample
+    #     for i in range(X.shape[1]):
+    #         # For each sample, go through each component
+    #         for j in range(tb.shape[1]):
+    #             # bij at sample i = Tij[n_outputs x n_bases]*g[n_basis x 1] at sample i
+    #             # Inplace update only works with += / *= / /= /-= and not for number or string
+    #             out[i, j] = np.dot(tb[i, j], out[i])
+    #
+    #     # Since bij's n_outputs should <= n_bases, remove the last leftover columns as out (was g) becomes bij
+    #     out = out[:, :tb.shape[1]]
+
+    # Since out's update when Tij is supplied is not inplace, return it explicitly
+    return out
 
 
 cdef inline int array_index(int32 val, int32[::1] arr):

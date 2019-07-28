@@ -72,7 +72,9 @@ class LossFunction(metaclass=ABCMeta):
 
     def update_terminal_regions(self, tree, X, y, residual, raw_predictions,
                                 sample_weight, sample_mask,
-                                learning_rate=0.1, k=0):
+                                learning_rate=0.1, k=0,
+                                # Ignore tensor basis input
+                                **kwargs):
         """Update the terminal regions (=leaves) of the given tree and
         updates the current predictions of the model. Traverses tree
         and invokes template method `_update_terminal_region`.
@@ -196,38 +198,54 @@ class LeastSquaresError(RegressionLossFunction):
 
         Parameters
         ----------
-        y : 1d array, shape (n_samples,)
+        y : 1/2d array, shape (n_samples,) or (n_samples, n_outputs)
             True labels.
 
-        raw_predictions : 2d array, shape (n_samples, K)
+        raw_predictions : 2d array, shape (n_samples, K) or (n_samples, n_outputs)
             The raw_predictions (i.e. values from the tree leaves).
 
         sample_weight : 1d array, shape (n_samples,), optional
             Sample weights.
         """
-        if sample_weight is None:
-            return np.mean((y - raw_predictions.ravel()) ** 2)
+        if len(y.shape) == 1:
+            if sample_weight is None:
+                return np.mean((y - raw_predictions.ravel()) ** 2)
+            else:
+                return (1 / sample_weight.sum() * np.sum(
+                    sample_weight * ((y - raw_predictions.ravel()) ** 2)))
+
+        # Else if multioutputs, take the Frobenius norm of the error along outputs (columns)
         else:
-            return (1 / sample_weight.sum() * np.sum(
-                sample_weight * ((y - raw_predictions.ravel()) ** 2)))
+            if sample_weight is None:
+                return np.mean(np.linalg.norm(y - raw_predictions, axis=1)**2.)
+            else:
+                return (1. / sample_weight.sum() * np.sum(
+                    sample_weight *
+                    (np.linalg.norm(y - raw_predictions, axis=1) ** 2.)))
 
     def negative_gradient(self, y, raw_predictions, **kargs):
         """Compute the negative gradient.
 
         Parameters
         ----------
-        y : 1d array, shape (n_samples,)
+        y : 1/2d array, shape (n_samples,) or (n_samples, n_outputs)
             The target labels.
 
-        raw_predictions : 1d array, shape (n_samples,)
+        raw_predictions : 1/2d array, shape (n_samples,) or (n_samples, n_outputs)
             The raw predictions (i.e. values from the tree leaves) of the
             tree ensemble at iteration ``i - 1``.
         """
-        return y - raw_predictions.ravel()
+        if len(y.shape) == 1:
+            return y - raw_predictions.ravel()
+        # Else if multioutputs, return a n_outputs residual
+        else:
+            return y - raw_predictions
 
     def update_terminal_regions(self, tree, X, y, residual, raw_predictions,
                                 sample_weight, sample_mask,
-                                learning_rate=0.1, k=0):
+                                learning_rate=0.1, k=0,
+                                # Extra kwarg for bij prediction
+                                tb=None):
         """Least squares does not need to update terminal regions.
 
         But it has to update the predictions.
@@ -256,7 +274,17 @@ class LeastSquaresError(RegressionLossFunction):
             The index of the estimator being updated.
         """
         # update predictions
-        raw_predictions[:, k] += learning_rate * tree.predict(X).ravel()
+        # Inplace update only works with += / *= / /= /-= and not for number or string
+        if len(y.shape) == 1:
+            raw_predictions[:, k] += learning_rate * tree.predict(X,
+                                                                  # Extra kwarg
+                                                                  tb=tb).ravel()
+        # Else if multioutputs, recall raw_predictions had shape (n_samples, n_outputs)
+        # and prediction has the same shape
+        else:
+            raw_predictions += learning_rate*tree.predict(X,
+                                                          # Extra kwarg
+                                                          tb=tb)
 
     def _update_terminal_region(self, tree, terminal_regions, leaf, X, y,
                                 residual, raw_predictions, sample_weight):
