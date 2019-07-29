@@ -72,8 +72,10 @@ cdef class Tree:
     # realize_iter can be an extra kwarg
     # to control whether and how many iteration for bij realizability
     cpdef np.ndarray predict(self, object X, np.ndarray tb=*, int realize_iter=*)
+
     # Extra method to make bij realizable during prediction in tensor basis MSE criterion
-    cdef np.ndarray _makeRealizable(self, np.ndarray labels)
+    @staticmethod
+    cdef np.ndarray _makeRealizable(np.ndarray labels)
 
     cpdef np.ndarray apply(self, object X)
     cdef np.ndarray _apply_dense(self, object X)

@@ -907,14 +907,15 @@ cdef class Tree:
             # Iterate to shift unrealizable bij to realizable
             for i in range(realize_iter_final):
                 # bij[..., 0] = self._makeRealizable(bij[..., 0])
-                out[..., 0] = self._makeRealizable(out[..., 0])
+                out[..., 0] = Tree._makeRealizable(out[..., 0])
 
         #     return bij
         # else:
 
         return out
 
-    cdef np.ndarray _makeRealizable(self, np.ndarray labels):
+    @staticmethod
+    cdef np.ndarray _makeRealizable(np.ndarray labels):
         """
         From Ling et al. (2016), see https://github.com/tbnn/tbnn.
         

@@ -23,8 +23,6 @@ from ..tree._tree cimport Tree
 from ..tree._tree cimport DTYPE_t
 from ..tree._tree cimport SIZE_t
 from ..tree._tree cimport INT32_t
-# Import _makeRealizable() from _tree.pyx
-from ..tree._tree cimport _makeRealizable
 from ..tree._utils cimport safe_realloc
 
 ctypedef np.int32_t int32
@@ -203,7 +201,8 @@ cpdef np.ndarray[float64, ndim=2] predict_stages(np.ndarray[object, ndim=2] esti
                    np.ndarray[float64, ndim=2] out,
                    # Extra kwargs
                    int n_outputs=1,
-                   np.ndarray[float64, ndim=3] tb=None,
+                   # Buffer types only allowed as function local variables
+                   np.ndarray tb=None,
                                                  Py_ssize_t realize_iter=0):
     """Add predictions of ``estimators`` to ``out``.
     out will be inplace updated only if tb is None.
@@ -269,7 +268,7 @@ cpdef np.ndarray[float64, ndim=2] predict_stages(np.ndarray[object, ndim=2] esti
             out = out[:, :tb.shape[1]]
             # Iterate to shift unrealizable bij to realizable
             for i in range(realize_iter):
-                out = _makeRealizable(out)
+                out = Tree._makeRealizable(out)
 
     # Since out's update when Tij is supplied is not inplace, return it explicitly
     return out
@@ -281,7 +280,8 @@ cpdef np.ndarray[float64, ndim=2] predict_stage(np.ndarray[object, ndim=2] estim
                   np.ndarray[float64, ndim=2] out,
                   # Extra kwarg for multioutputs
                   int n_outputs=1,
-                  np.ndarray[float64, ndim=3] tb=None,
+                  # Buffer types only allowed as function local variables
+                  np.ndarray tb=None,
                                                 Py_ssize_t realize_iter=0):
     """Add predictions of ``estimators[stage]`` to ``out``.
     out will be inplace updated. If in tensor basis mode, out needs to be updated and returned explicitly.
