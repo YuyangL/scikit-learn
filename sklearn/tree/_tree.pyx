@@ -891,28 +891,27 @@ cdef class Tree:
             print("\nTensor basis is provided, the predictions are bij with {} realizability iterations. ".format(
                     realize_iter_final))
             # Note bij can have 6 outputs due to tensor symmetry
-            # bij = np.empty((X.shape[0], tb.shape[1], self.max_n_classes))
-
+            bij = np.empty((X.shape[0], tb.shape[1], self.max_n_classes))
             # Go through each sample then each output
             for i in range(X.shape[0]):
                 for j in range(tb.shape[1]):
                     # max_n_classes in 3rd D is 1 and is useless
-                    # bij[i, j, 0] = np.dot(tb[i, j], out[i, :, 0])
+                    bij[i, j, 0] = np.dot(tb[i, j], out[i, :, 0])
+                    # out[i, j, 0] = np.dot(tb[i, j], out[i, :, 0])
 
-                    out[i, j, 0] = np.dot(tb[i, j], out[i, :, 0])
+            # # Since out was g and has 10 outputs and becomes bij that has 6 or 9 outputs,
+            # # remove leftover columns
+            # out = out[:, :tb.shape[1], :]
 
-            # Since out was g and has 10 outputs and becomes bij that has 6 or 9 outputs,
-            # remove leftover columns
-            out = out[:, :tb.shape[1], :]
             # Iterate to shift unrealizable bij to realizable
             for i in range(realize_iter_final):
-                # bij[..., 0] = self._makeRealizable(bij[..., 0])
-                out[..., 0] = Tree._makeRealizable(out[..., 0])
+                bij[..., 0] = Tree._makeRealizable(bij[..., 0])
+                # out[..., 0] = Tree._makeRealizable(out[..., 0])
 
-        #     return bij
-        # else:
+            return bij
+        else:
 
-        return out
+            return out
 
     @staticmethod
     cdef np.ndarray _makeRealizable(np.ndarray labels):

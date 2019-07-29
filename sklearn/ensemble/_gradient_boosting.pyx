@@ -215,6 +215,7 @@ cpdef np.ndarray[float64, ndim=2] predict_stages(np.ndarray[object, ndim=2] esti
     cdef Py_ssize_t n_estimators = estimators.shape[0]
     cdef Py_ssize_t K = estimators.shape[1]
     cdef Tree tree
+    cdef np.ndarray[float64, ndim=2] bij
 
     if issparse(X):
         if X.format != 'csr':
@@ -256,22 +257,28 @@ cpdef np.ndarray[float64, ndim=2] predict_stages(np.ndarray[object, ndim=2] esti
         if tb is not None:
             print("\nTensor basis is provided, the predictions are bij with {} realizability iterations. ".format(
                     realize_iter))
+            # Note bij can have 6 outputs due to tensor symmetry
+            bij = np.empty((X.shape[0], tb.shape[1]))
             # Go through each sample
             for i in range(X.shape[1]):
                 # For each sample, go through each component
                 for j in range(tb.shape[1]):
                     # bij at sample i = Tij[n_outputs x n_bases]*g[n_basis x 1] at sample i
-                    # Inplace update only works with += / *= / /= /-= and not for number or string
-                    out[i, j] = np.dot(tb[i, j], out[i])
+                    bij[i, j] = np.dot(tb[i, j], out[i])
 
-            # Since bij's n_outputs should <= n_bases, remove the last leftover columns as out (was g) becomes bij
-            out = out[:, :tb.shape[1]]
+            # # Since bij's n_outputs should <= n_bases, remove the last leftover columns as out (was g) becomes bij
+            # out = out[:, :tb.shape[1]]
+
             # Iterate to shift unrealizable bij to realizable
             for i in range(realize_iter):
-                out = Tree._makeRealizable(out)
+                bij = Tree._makeRealizable(bij)
 
-    # Since out's update when Tij is supplied is not inplace, return it explicitly
-    return out
+            # Since out's update when Tij is supplied is not inplace, return it explicitly
+            return bij
+
+        else:
+
+            return out
 
 
 cpdef np.ndarray[float64, ndim=2] predict_stage(np.ndarray[object, ndim=2] estimators,
