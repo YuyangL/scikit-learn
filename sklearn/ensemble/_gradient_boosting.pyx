@@ -107,8 +107,9 @@ cdef void _predict_regression_tree_inplace_fast_dense(DTYPE_t *X,
         for j in range(K):
             # j is doing the functionality of k since k is always 0 for regression.
             # Tree.value points to first value of the node value array address,
-            # then Tree.value[node - root_node + j] accesses jth output value from that node
-            out[i * K + k + j] += scale * value[node - root_node + j]
+            # then Tree.value[node - root_node + j] accesses jth output value from that node.
+            # For value, don't forget value_stride which is number of outputs
+            out[i * K + k + j] += scale * value[(node - root_node)*K + j]
 
 def _predict_regression_tree_stages_sparse(np.ndarray[object, ndim=2] estimators,
                                            object X, double scale,
