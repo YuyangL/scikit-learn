@@ -245,7 +245,8 @@ class LeastSquaresError(RegressionLossFunction):
                                 sample_weight, sample_mask,
                                 learning_rate=0.1, k=0,
                                 # Extra kwarg for bij prediction
-                                tb=None):
+                                tb=None,
+                                bij_novelty=None):
         """Least squares does not need to update terminal regions.
 
         But it has to update the predictions.
@@ -273,18 +274,48 @@ class LeastSquaresError(RegressionLossFunction):
         k : int, default=0
             The index of the estimator being updated.
         """
+
+        # Recall last D is useless Tree.max_n_classes and is 1
+        prediction = tree.predict(X,
+                                  # Extra kwarg
+                                  tb=tb)[..., 0]
+        # Manually remove/cap bij novelty values outside [-1/3*10, 2/3*10] for diagonal bij
+        # and [-1/2*10, 1/2*10] for off-diagonal bij
+        if tb is not None and bij_novelty in ('excl', 'exclude', 'lim', 'limit', 'cap'):
+            # Diagonal indices depending on full outputs or unique outputs
+            ii = (0, 4, 8) if prediction.shape[1] == 9 else (0, 3, 5)
+            # Mask containing values depending on either removal or limitation
+            if bij_novelty in ('excl', 'exclude'):
+                mask = (0., 0., 0., 0.)
+            elif bij_novelty in ('lim', 'limit', 'cap'):
+                mask = (-5., 5., -10/3., 20/3.)
+
+            # Go through every output
+            for i in range(prediction.shape[1]):
+                prediction_i = prediction[:, i]
+                # For off-diagonal bij, bound is [-0.5, 0.5],
+                # excl. whatever > 10 times the bounds
+                if i not in ii:
+                    prediction_i[prediction_i < -5.] = mask[0]
+                    prediction_i[prediction_i > 5.] = mask[1]
+                # Else if diagonal bij, bound is [-1/3, 2/3]
+                else:
+                    prediction_i[prediction_i < -10/3.] = mask[2]
+                    prediction_i[prediction_i > 20/3.] = mask[3]
+
+                # Assign the masked array back and delete temporary prediction_i
+                prediction[:, i] = prediction_i
+
+            del prediction_i
+
         # update predictions
         # Inplace update only works with += / *= / /= /-= and not for number or string
         if len(y.shape) == 1:
-            raw_predictions[:, k] += learning_rate * tree.predict(X,
-                                                                  # Extra kwarg
-                                                                  tb=tb).ravel()
+            raw_predictions[:, k] += learning_rate * prediction.ravel()
         # Else if multioutputs, recall raw_predictions had shape (n_samples, n_outputs)
         # and prediction has the same shape
         else:
-            raw_predictions += learning_rate*tree.predict(X,
-                                                          # Extra kwarg
-                                                          tb=tb)
+            raw_predictions += learning_rate*prediction
 
     def _update_terminal_region(self, tree, terminal_regions, leaf, X, y,
                                 residual, raw_predictions, sample_weight):

@@ -586,7 +586,6 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                     mask = (-5., 5., -10/3., 20/3.)
 
                 # Go through every output
-                proba_i = np.empty((proba.shape[1], 1))
                 for i in range(proba.shape[1]):
                     proba_i = proba[:, i]
                     # For off-diagonal bij, bound is [-0.5, 0.5],
@@ -599,7 +598,7 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
                         proba_i[proba_i < -10/3.] = mask[2]
                         proba_i[proba_i > 20/3.] = mask[3]
 
-                    # Assign the masked array back and delete temporary proba_i array
+                    # Assign the masked array back and delete temporary proba_i
                     proba[:, i] = proba_i
 
                 del proba_i

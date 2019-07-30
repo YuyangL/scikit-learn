@@ -241,7 +241,7 @@ cpdef np.ndarray[float64, ndim=2] predict_stages(np.ndarray[object, ndim=2] esti
                         tree.nodes, tree.value,
                         scale, k, K, X.shape[0], X.shape[1],
                         <float64 *> (<np.ndarray> out).data)
-                # If multioutputs, replace K with n_outputs
+                # If multioutputs, replace K with either n_outputs or 10 for tensor basis mode
                 else:
                     _predict_regression_tree_inplace_fast_dense(
                         <DTYPE_t*> (<np.ndarray> X).data,
@@ -298,9 +298,9 @@ cpdef np.ndarray[float64, ndim=2] predict_stage(np.ndarray[object, ndim=2] estim
     """
     # Inplace update of out
     out = predict_stages(estimators[stage:stage + 1], X, scale, out,
-                   # Extra kwargs
-                   n_outputs=n_outputs,
-                   tb=tb,
+                         # Extra kwargs
+                         n_outputs=n_outputs,
+                         tb=tb,
                          realize_iter=realize_iter)
 
     # cdef Py_ssize_t i, j
