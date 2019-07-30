@@ -450,7 +450,7 @@ def _accumulate_prediction(predict, X, out, lock,
                          bij_novelty=bij_novelty)
     if bij_novelty in ('excl', 'exclude'):
         warn('\nbij novelties are set to 0, i.e. no prediction, instead of NaN for prediction mean')
-        prediction[prediction == np.nan] = 0.
+        prediction = np.nan_to_num(prediction, copy=False)
 
     with lock:
         if len(out) == 1:
@@ -922,7 +922,7 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
 
         print('\nIf bij novelties are set to NaN, they are set to 0, i.e. no prediction, for OOB R2 score to compute '
               'properly.')
-        predictions[predictions == np.nan] = 0.
+        predictions = np.nan_to_num(predictions, copy=False)
         self.oob_score_ = 0.0
 
         for k in range(self.n_outputs_):

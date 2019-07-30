@@ -1096,7 +1096,7 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
 
         if self.bij_novelty in ('excl', 'exclude'):
             warn('\nbij novelties are set to 0, i.e. no prediction, instead of NaN')
-            y_predict[y_predict == np.nan] = 0.
+            y_predict = np.nan_to_num(y_predict, copy=False)
 
         # If in tensor basis mode, then y is multioutputs, calculate Frobenius norm for each sample
         # to collapse y from shape (n_samples, n_outputs) to (n_samples,)
@@ -1159,7 +1159,7 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
             if bij_novelty in ('excl', 'exclude'):
                 warn(
                     '\nbij novelties are set to 0, i.e. no prediction, instead of NaN')
-                predictions[predictions == np.nan] = 0.
+                predictions = np.nan_to_num(predictions, copy=False)
 
             # First collapse axis 1: n_outputs by calculating Frobenius norm,
             # then n_estimator becomes axis 1, sort along it for every sample

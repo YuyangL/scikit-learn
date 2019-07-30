@@ -87,7 +87,7 @@ cdef void _predict_regression_tree_inplace_fast_dense(DTYPE_t *X,
         ``out`` is assumed to be a two-dimensional array of
         shape ``(n_samples, K)``.
     """
-    cdef Py_ssize_t i
+    cdef Py_ssize_t i, j
     cdef Node *node
     # Compare this to tree_._apply_dense(), the return out should be 10 g in tensor basis mode,
     # or n outputs in multioutputs
@@ -102,10 +102,13 @@ cdef void _predict_regression_tree_inplace_fast_dense(DTYPE_t *X,
 
         # out is a pointer to leaf y data, so out[i] is the start leaf y value of sample i,
         # while out[i:(i + K)] should contain each leaf y output value in multioutputs for sample i.
-        # value is also a pointer to array of shape (node_count, n_outputs, max_n_classes).
         # (node - root_node) is difference between two pointers means number of elements of the type
         # that would fit between the targets of the two pointers.
-        out[i * K + k] += scale * value[node - root_node]
+        for j in range(K):
+            # j is doing the functionality of k since k is always 0 for regression.
+            # Tree.value points to first value of the node value array address,
+            # then Tree.value[node - root_node + j] accesses jth output value from that node
+            out[i * K + k + j] += scale * value[node - root_node + j]
 
 def _predict_regression_tree_stages_sparse(np.ndarray[object, ndim=2] estimators,
                                            object X, double scale,
