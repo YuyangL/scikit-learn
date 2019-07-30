@@ -263,7 +263,7 @@ cpdef np.ndarray[float64, ndim=2] predict_stages(np.ndarray[object, ndim=2] esti
             # Note bij can have 6 outputs due to tensor symmetry
             bij = np.empty((X.shape[0], tb.shape[1]))
             # Go through each sample
-            for i in range(X.shape[1]):
+            for i in range(X.shape[0]):
                 # For each sample, go through each component
                 for j in range(tb.shape[1]):
                     # bij at sample i = Tij[n_outputs x n_bases]*g[n_basis x 1] at sample i
