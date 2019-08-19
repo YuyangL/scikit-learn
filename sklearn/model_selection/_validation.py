@@ -497,8 +497,10 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
     fit_params = fit_params if fit_params is not None else {}
     # Other supplied arrays to estimator.fit() are limited to train indices.
     # However, exclude this step for "tb" as it's train-test split below.
+    # For pipelines, the format of the tb kw is "{step name}__tb"
+    tbkey = [key for key in fit_params.keys() if 'tb' in key][0]
     # None means exception won't be raised and None is returned as tb
-    tb = fit_params.pop('tb', None)
+    tb = fit_params.pop(tbkey, None)
     fit_params = {k: _index_param_value(X, v, train)
                   for k, v in fit_params.items()} if len(fit_params) > 0 else {}
 
@@ -526,7 +528,9 @@ def _fit_and_score(estimator, X, y, scorer, train, test, verbose,
         else:
             # Provide tb_train too if it exists
             if tb_train is not None:
-                estimator.fit(X_train, y_train, tb=tb_train, **fit_params)
+                # Supply tb_train back to fit_params
+                fit_params[tbkey] = tb_train
+                estimator.fit(X_train, y_train, **fit_params)
             else:
                 estimator.fit(X_train, y_train, **fit_params)
 
@@ -629,7 +633,9 @@ def _score(estimator, X_test, y_test, scorer, is_multimetric=False,
         else:
             # Extra arg of tb_test to feed estimator.score().
             # Here essentially _passthrough_scorer() from scorer.py is done
-            score = scorer(estimator, X_test, y_test, tb=tb_test,
+            score = scorer(estimator, X_test, y_test,
+                           # Extra kwargs
+                           tb=tb_test,
                            bij_novelty=bij_novelty)
 
         if hasattr(score, 'item'):
@@ -893,7 +899,8 @@ def _fit_and_predict(estimator, X, y, train, test, verbose, fit_params,
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
     # Check if tb key is stored in fit_params, if so, the estimator is TBDT
-    tb = fit_params.pop('tb', None)
+    tbkey = [key for key in fit_params.keys() if 'tb' in key][0]
+    tb = fit_params.pop(tbkey, None)
     # Some other fit parameter arrays ared indexed according to X, but tb which we split manually like y
     fit_params = {k: _index_param_value(X, v, train)
                   for k, v in fit_params.items()} if len(fit_params) > 0 else {}
@@ -914,7 +921,9 @@ def _fit_and_predict(estimator, X, y, train, test, verbose, fit_params,
         if tb_train is None:
             estimator.fit(X_train, y_train, **fit_params)
         else:
-            estimator.fit(X_train, y_train, tb=tb_train, **fit_params)
+            # Supply split tb back to fit_params
+            fit_params[tbkey] = tb_train
+            estimator.fit(X_train, y_train, **fit_params)
 
     func = getattr(estimator, method)
     # If in tb mode, supply tb_test to predict() too

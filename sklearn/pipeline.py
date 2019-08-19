@@ -572,7 +572,10 @@ class Pipeline(_BaseComposition):
         return Xt
 
     @if_delegate_has_method(delegate='_final_estimator')
-    def score(self, X, y=None, sample_weight=None):
+    def score(self, X, y=None, sample_weight=None,
+              # Extra kwargs
+              tb=None,
+              bij_novelty=None):
         """Apply transforms, and score with the final estimator
 
         Parameters
@@ -599,7 +602,14 @@ class Pipeline(_BaseComposition):
         score_params = {}
         if sample_weight is not None:
             score_params['sample_weight'] = sample_weight
-        return self.steps[-1][-1].score(Xt, y, **score_params)
+
+        # Extra kwargs to the score method if tb and/or bij_novelty is supplied
+        if tb is None and bij_novelty is None:
+            return self.steps[-1][-1].score(Xt, y, **score_params)
+        else:
+            return self.steps[-1][-1].score(Xt, y,
+                                            tb=tb,
+                                            bij_novelty=bij_novelty, **score_params)
 
     @property
     def classes_(self):
