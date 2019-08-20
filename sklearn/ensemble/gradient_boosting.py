@@ -1287,7 +1287,7 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
             loss.update_terminal_regions(
                 tree.tree_, X, y, residual, raw_predictions, sample_weight,
                 sample_mask, learning_rate=self.learning_rate, k=k,
-            # Extra kwarg
+            # Extra kwargs
             tb=tb,
             bij_novelty=self.bij_novelty)
 
@@ -1795,6 +1795,7 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                      # Extra kwargs
                      tb=None,
                      realize_iter=0,
+                     bij_novelty=None,
                      return_g=False):
         """Return the sum of the trees raw predictions (+ init estimator)."""
 
@@ -1817,6 +1818,18 @@ class BaseGradientBoosting(BaseEnsemble, metaclass=ABCMeta):
                        n_outputs=n_outputs_raw,
                        tb=tb,
                                          realize_iter=realize_iter)
+        # Manually remove/reset bij novelty values outside bound [-1/2*3, 2/3*3], with a lenient margin multiplier 3
+        if tb is not None and bij_novelty in ('excl', 'exclude', 'reset') and not return_g:
+            # Mask containing values depending on either removal or reset
+            if bij_novelty in ('excl', 'exclude'):
+                mask = np.ones(raw_predictions.shape[1])*np.nan
+            elif bij_novelty == 'reset':
+                mask = np.zeros(raw_predictions.shape[1])
+
+            # Go through every sample
+            for i in range(raw_predictions.shape[0]):
+                if max(raw_predictions[i]) > 2. or min(raw_predictions[i]) < -1.5: raw_predictions[i] = mask
+
         return raw_predictions
 
     def _staged_raw_predict(self, X,
@@ -2699,9 +2712,8 @@ class GradientBoostingRegressor(BaseGradientBoosting, RegressorMixin):
                 # Extra kwargs
                 tb=None,
                 realize_iter=-1,
-                return_g=False,
-                # Ignore bij_novelty kwarg
-                **kwargs):
+                bij_novelty=None,
+                return_g=False):
         """Predict regression target for X.
 
         Parameters
@@ -2726,6 +2738,7 @@ class GradientBoostingRegressor(BaseGradientBoosting, RegressorMixin):
                                      # Extra kwargs
                                      tb=tb,
                                      realize_iter=realize_iter_final,
+                                     bij_novelty=bij_novelty,
                                      return_g=return_g).ravel()
 
         else:
@@ -2733,6 +2746,7 @@ class GradientBoostingRegressor(BaseGradientBoosting, RegressorMixin):
                                      # Extra kwargs
                                      tb=tb,
                                      realize_iter=realize_iter_final,
+                                     bij_novelty=bij_novelty,
                                      return_g=return_g)
 
     def staged_predict(self, X,

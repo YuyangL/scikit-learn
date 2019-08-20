@@ -1095,7 +1095,7 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
                                                                               bij_novelty=self.bij_novelty)
 
         if self.bij_novelty in ('excl', 'exclude'):
-            warn('\nbij novelties are set to 0, i.e. no prediction, instead of NaN')
+            warn('\nNaN bij novelties are set to 0, i.e. no prediction')
             y_predict = np.nan_to_num(y_predict, copy=False)
 
         # If in tensor basis mode, then y is multioutputs, calculate Frobenius norm for each sample
@@ -1137,7 +1137,7 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         return sample_weight, estimator_weight, estimator_error
 
     def _get_median_predict(self, X, limit,
-                            # Extra kwargs for TBDT
+                            # Extra kwargs
                             tb=None,
                             realize_iter=None,
                             bij_novelty=None):
@@ -1157,8 +1157,7 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
                                                   bij_novelty=bij_novelty)
 
             if bij_novelty in ('excl', 'exclude'):
-                warn(
-                    '\nbij novelties are set to 0, i.e. no prediction, instead of NaN')
+                warn('\nNaN bij novelties are set to 0, i.e. no prediction')
                 predictions = np.nan_to_num(predictions, copy=False)
 
             # First collapse axis 1: n_outputs by calculating Frobenius norm,
@@ -1175,6 +1174,7 @@ class AdaBoostRegressor(BaseWeightBoosting, RegressorMixin):
         # Return median predictions
         if tb is None:
             return predictions[np.arange(_num_samples(X)), median_estimators]
+
         # If in tensor basis mode with multioutput predictions
         # TODO: why arange?
         else:

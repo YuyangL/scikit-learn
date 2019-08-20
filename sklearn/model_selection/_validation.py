@@ -901,7 +901,7 @@ def _fit_and_predict(estimator, X, y, train, test, verbose, fit_params,
     # Check if tb key is stored in fit_params, if so, the estimator is TBDT
     tbkey = [key for key in fit_params.keys() if 'tb' in key][0]
     tb = fit_params.pop(tbkey, None)
-    # Some other fit parameter arrays ared indexed according to X, but tb which we split manually like y
+    # Some other fit parameter arrays are indexed according to X, but tb which we split manually like y
     fit_params = {k: _index_param_value(X, v, train)
                   for k, v in fit_params.items()} if len(fit_params) > 0 else {}
 

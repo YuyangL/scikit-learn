@@ -431,7 +431,7 @@ class BaseForest(BaseEnsemble, MultiOutputMixin, metaclass=ABCMeta):
 
 
 def _accumulate_prediction(predict, X, out, lock,
-                           # Extra tensor basis kwarg
+                           # Extra tensor basis kwargs
                            tb=None,
                            realize_iter=None,
                            bij_novelty=None):
@@ -449,7 +449,7 @@ def _accumulate_prediction(predict, X, out, lock,
                          realize_iter=realize_iter,
                          bij_novelty=bij_novelty)
     if bij_novelty in ('excl', 'exclude'):
-        warn('\nbij novelties are set to 0, i.e. no prediction, instead of NaN for prediction mean')
+        warn('\nNaN bij novelties are set to 0, i.e. no prediction for mean prediction to compute properly')
         prediction = np.nan_to_num(prediction, copy=False)
 
     with lock:
@@ -461,7 +461,7 @@ def _accumulate_prediction(predict, X, out, lock,
 
 
 def _append_prediction(predict, X, out, tree_idx,
-                       # Extra tensor basis kwarg
+                       # Extra tensor basis kwargs
                        tb=None,
                        realize_iter=None,
                        bij_novelty=None):
@@ -474,7 +474,7 @@ def _append_prediction(predict, X, out, tree_idx,
     complains that it cannot pickle it when placed there.
     """
 
-    # bij outlier can either be set to NaN (preferred) or limit
+    # bij outlier/novelty can either be set to NaN (preferred) or reset to 0
     prediction = predict(X, check_input=False,
                          # Extra kwarg
                          tb=tb,
@@ -920,9 +920,11 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             self.oob_prediction_ = \
                 self.oob_prediction_.reshape((n_samples, ))
 
-        print('\nIf bij novelties are set to NaN, they are set to 0, i.e. no prediction, for OOB R2 score to compute '
-              'properly.')
-        predictions = np.nan_to_num(predictions, copy=False)
+        if self.bij_novelty in ('excl', 'exclude'):
+            print('\nNaN bij novelties are set to 0, i.e. no prediction, '
+                  'for OOB R2 score to compute properly.')
+            predictions = np.nan_to_num(predictions, copy=False)
+
         self.oob_score_ = 0.0
 
         for k in range(self.n_outputs_):

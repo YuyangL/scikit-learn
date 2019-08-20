@@ -574,34 +574,18 @@ class BaseDecisionTree(BaseEstimator, MultiOutputMixin, metaclass=ABCMeta):
 
         # Regression
         else:
-            # Manually remove/cap bij novelty values outside [-1/3*10, 2/3*10] for diagonal bij
-            # and [-1/2*10, 1/2*10] for off-diagonal bij
-            if tb is not None and bij_novelty in ('excl', 'exclude', 'lim', 'limit', 'cap'):
-                # Diagonal indices depending on full outputs or unique outputs
-                ii = (0, 4, 8) if proba.shape[1] == 9 else (0, 3, 5)
-                # Mask containing values depending on either removal or limitation
+            # Manually remove/reset bij novelty values outside bound [-1/2*3, 2/3*3], with a lenient margin multiplier 3
+            if tb is not None and bij_novelty in ('excl', 'exclude', 'reset'):
+                # Mask containing values depending on either removal or reset
                 if bij_novelty in ('excl', 'exclude'):
-                    mask = (np.nan, np.nan, np.nan, np.nan)
-                elif bij_novelty in ('lim', 'limit', 'cap'):
-                    mask = (-5., 5., -10/3., 20/3.)
+                    mask = np.ones(proba.shape[1])*np.nan
+                elif bij_novelty == 'reset':
+                    mask = np.zeros(proba.shape[1])
 
-                # Go through every output
-                for i in range(proba.shape[1]):
-                    proba_i = proba[:, i]
-                    # For off-diagonal bij, bound is [-0.5, 0.5],
-                    # excl. whatever > 10 times the bounds
-                    if i not in ii:
-                        proba_i[proba_i < -5.] = mask[0]
-                        proba_i[proba_i > 5.] = mask[1]
-                    # Else if diagonal bij, bound is [-1/3, 2/3]
-                    else:
-                        proba_i[proba_i < -10/3.] = mask[2]
-                        proba_i[proba_i > 20/3.] = mask[3]
-
-                    # Assign the masked array back and delete temporary proba_i
-                    proba[:, i] = proba_i
-
-                del proba_i
+                # Go through every sample
+                for i in range(proba.shape[0]):
+                    # Recall proba has a 3rd D which is max_n_classes = 1
+                    if max(proba[i]) > 2. or min(proba[i]) < -1.5: proba[i, :, 0] = mask
 
             if self.n_outputs_ == 1:
                 # If tb is provided, prediction of 1 output has shape (n_samples, 1, 1).

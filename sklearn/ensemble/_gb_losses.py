@@ -13,6 +13,7 @@ from ..utils.fixes import logsumexp
 from ..utils.stats import _weighted_percentile
 from ..dummy import DummyClassifier
 from ..dummy import DummyRegressor
+from warnings import warn
 
 
 class LossFunction(metaclass=ABCMeta):
@@ -73,11 +74,12 @@ class LossFunction(metaclass=ABCMeta):
     def update_terminal_regions(self, tree, X, y, residual, raw_predictions,
                                 sample_weight, sample_mask,
                                 learning_rate=0.1, k=0,
-                                # Ignore tensor basis input
-                                **kwargs):
-        """Update the terminal regions (=leaves) of the given tree and
-        updates the current predictions of the model. Traverses tree
-        and invokes template method `_update_terminal_region`.
+                                # Extra kwarg for bij prediction
+                                tb=None,
+                                bij_novelty=None):
+        """Least squares does not need to update terminal regions.
+
+        But it has to update the predictions.
 
         Parameters
         ----------
@@ -101,24 +103,30 @@ class LossFunction(metaclass=ABCMeta):
              ``learning_rate``.
         k : int, default=0
             The index of the estimator being updated.
-
         """
-        # compute leaf for each sample in ``X``.
-        terminal_regions = tree.apply(X)
 
-        # mask all which are not in sample mask.
-        masked_terminal_regions = terminal_regions.copy()
-        masked_terminal_regions[~sample_mask] = -1
+        # Recall last D is useless Tree.max_n_classes and is 1
+        prediction = tree.predict(X,
+                                  # Extra kwarg
+                                  tb=tb)[..., 0]
+        # Manually reset bij novelty values outside [-1/2*3, 2/3*3] with lenient margin multiplier 3
+        if tb is not None and bij_novelty in ('excl', 'exclude', 'reset'):
+            if bij_novelty in ('excl', 'exclude'): warn('\nNaN bij novelties are set to 0, i.e. no prediction')
+            mask = np.zeros(prediction.shape[1])
+            prediction_mask = raw_predictions + learning_rate*prediction
+            for i in range(prediction.shape[0]):
+                if max(prediction_mask[i]) > 2. or min(prediction_mask[i]) < -1.5: prediction[i] = mask
 
-        # update each leaf (= perform line search)
-        for leaf in np.where(tree.children_left == TREE_LEAF)[0]:
-            self._update_terminal_region(tree, masked_terminal_regions,
-                                         leaf, X, y, residual,
-                                         raw_predictions[:, k], sample_weight)
+        # update predictions
+        # Inplace update only works with += / *= / /= /-= and not for number or string
+        if len(y.shape) == 1:
+            raw_predictions[:, k] += learning_rate*prediction.ravel()
+        # Else if multioutputs, recall raw_predictions had shape (n_samples, n_outputs)
+        # and prediction has the same shape
+        else:
+            raw_predictions += learning_rate*prediction
 
-        # update predictions (both in-bag and out-of-bag)
-        raw_predictions[:, k] += \
-            learning_rate * tree.value[:, 0, 0].take(terminal_regions, axis=0)
+        del prediction
 
     @abstractmethod
     def _update_terminal_region(self, tree, terminal_regions, leaf, X, y,
@@ -279,34 +287,14 @@ class LeastSquaresError(RegressionLossFunction):
         prediction = tree.predict(X,
                                   # Extra kwarg
                                   tb=tb)[..., 0]
-        # Manually remove/cap bij novelty values outside [-1/3*10, 2/3*10] for diagonal bij
-        # and [-1/2*10, 1/2*10] for off-diagonal bij
-        if tb is not None and bij_novelty in ('excl', 'exclude', 'lim', 'limit', 'cap'):
-            # Diagonal indices depending on full outputs or unique outputs
-            ii = (0, 4, 8) if prediction.shape[1] == 9 else (0, 3, 5)
-            # Mask containing values depending on either removal or limitation
-            if bij_novelty in ('excl', 'exclude'):
-                mask = (0., 0., 0., 0.)
-            elif bij_novelty in ('lim', 'limit', 'cap'):
-                mask = (-5., 5., -10/3., 20/3.)
-
-            # Go through every output
-            for i in range(prediction.shape[1]):
-                prediction_i = prediction[:, i]
-                # For off-diagonal bij, bound is [-0.5, 0.5],
-                # excl. whatever > 10 times the bounds
-                if i not in ii:
-                    prediction_i[prediction_i < -5.] = mask[0]
-                    prediction_i[prediction_i > 5.] = mask[1]
-                # Else if diagonal bij, bound is [-1/3, 2/3]
-                else:
-                    prediction_i[prediction_i < -10/3.] = mask[2]
-                    prediction_i[prediction_i > 20/3.] = mask[3]
-
-                # Assign the masked array back and delete temporary prediction_i
-                prediction[:, i] = prediction_i
-
-            del prediction_i
+        # Manually remove/reset bij novelty values outside [-1/2*3, 2/3*3] with lenient margin multiplier 3
+        if tb is not None and bij_novelty in ('excl', 'exclude', 'reset'):
+            # Mask containing values depending on either removal or reset
+            if bij_novelty in ('excl', 'exclude'): warn('\nNaN bij novelties are set to 0, i.e. no prediction')
+            mask = np.zeros(prediction.shape[0])
+            # Go through every sample and reset the whole sample that exceeds the bound
+            for i in range(prediction.shape[0]):
+                if max(prediction[i]) > 2. or min(prediction[i]) < -1.5: prediction[i] = mask
 
         # update predictions
         # Inplace update only works with += / *= / /= /-= and not for number or string
@@ -380,7 +368,6 @@ class LeastAbsoluteError(RegressionLossFunction):
         tree.value[leaf, 0, 0] = _weighted_percentile(diff, sample_weight,
                                                       percentile=50)
 
-
 class HuberLossFunction(RegressionLossFunction):
     """Huber loss function for robust regression.
 
@@ -413,38 +400,79 @@ class HuberLossFunction(RegressionLossFunction):
 
         Parameters
         ----------
-        y : 1d array, shape (n_samples,)
+        y : 1/2d array, shape (n_samples,) or (n_samples, n_outputs)
             True labels.
 
-        raw_predictions : 2d array, shape (n_samples, K)
+        raw_predictions : 2d array, shape (n_samples, K) or (n_samples, n_outputs)
             The raw predictions (i.e. values from the tree leaves) of the
             tree ensemble.
 
         sample_weight : 1d array, shape (n_samples,), optional
             Sample weights.
         """
-        raw_predictions = raw_predictions.ravel()
+        if len(y.shape) == 1:
+            raw_predictions = raw_predictions.ravel()
+
         diff = y - raw_predictions
         gamma = self.gamma
         if gamma is None:
             if sample_weight is None:
-                gamma = np.percentile(np.abs(diff), self.alpha * 100)
+                gamma = np.percentile(np.abs(diff), self.alpha * 100, axis=0)
             else:
-                gamma = _weighted_percentile(np.abs(diff), sample_weight,
+                if len(y.shape) == 1:
+                    gamma = _weighted_percentile(np.abs(diff), sample_weight,
                                              self.alpha * 100)
+                # Else if multioutputs
+                else:
+                    gamma = np.empty(y.shape[1])
+                    # _weighted_percentile() sort array along 1 axis. Thus retrieve gamma 1 output at a time
+                    for i in range(y.shape[1]):
+                        gamma[i] = _weighted_percentile(np.abs(diff[:, i]), sample_weight,
+                                                     self.alpha*100)
 
-        gamma_mask = np.abs(diff) <= gamma
-        if sample_weight is None:
-            sq_loss = np.sum(0.5 * diff[gamma_mask] ** 2)
-            lin_loss = np.sum(gamma * (np.abs(diff[~gamma_mask]) -
-                                       gamma / 2))
-            loss = (sq_loss + lin_loss) / y.shape[0]
+        if len(y.shape) == 1:
+            gamma_mask = np.abs(diff) <= gamma
+            if sample_weight is None:
+                sq_loss = np.sum(0.5*diff[gamma_mask]**2)
+                lin_loss = np.sum(gamma*(np.abs(diff[~gamma_mask]) -
+                                         gamma/2))
+                loss = (sq_loss + lin_loss)/y.shape[0]
+            else:
+                sq_loss = np.sum(0.5*sample_weight[gamma_mask]*
+                                 diff[gamma_mask]**2)
+                lin_loss = np.sum(gamma*sample_weight[~gamma_mask]*
+                                  (np.abs(diff[~gamma_mask]) - gamma/2))
+                loss = (sq_loss + lin_loss)/sample_weight.sum()
+
+        # Else if multioutputs
         else:
-            sq_loss = np.sum(0.5 * sample_weight[gamma_mask] *
-                             diff[gamma_mask] ** 2)
-            lin_loss = np.sum(gamma * sample_weight[~gamma_mask] *
-                              (np.abs(diff[~gamma_mask]) - gamma / 2))
-            loss = (sq_loss + lin_loss) / sample_weight.sum()
+            # Again, create mask 1 output at a time
+            gamma_mask = np.empty_like(y, dtype=np.bool)
+            for i in range(y.shape[1]):
+                gamma_mask[:, i] = np.abs(diff[:, i]) <= gamma[i]
+
+            if sample_weight is None:
+                sq_loss = np.sum(0.5 * diff[gamma_mask] ** 2)
+                lin_loss = np.sum(gamma * (np.abs(diff[~gamma_mask]) -
+                                           gamma / 2))
+                # Output-averaged loss
+                loss = (sq_loss + lin_loss) / y.shape[0]/y.shape[1]
+            # Else if sample_weight is provided
+            else:
+                # sample_weight has shape (n_samples,) while gamma_mask has shape (n_samples, n_outputs),
+                # thus aggregate 1 output at a time
+                sq_loss, lin_loss, loss = 0., 0., 0.
+                for i in range(y.shape[1]):
+                    sq_loss += np.sum(0.5 * sample_weight[gamma_mask[:, i]] *
+                                     diff[gamma_mask[:, i], i] ** 2)
+                    lin_loss += np.sum(gamma[i] * sample_weight[~gamma_mask[:, i]] *
+                                      (np.abs(diff[~gamma_mask[:, i], i]) - gamma[i] / 2))
+                    loss += (sq_loss + lin_loss) / sample_weight.sum()
+
+                # Output-averaged loss
+                loss /= y.shape[1]
+
+        del gamma_mask
         return loss
 
     def negative_gradient(self, y, raw_predictions, sample_weight=None,
@@ -463,32 +491,113 @@ class HuberLossFunction(RegressionLossFunction):
         sample_weight : 1d array, shape (n_samples,), optional
             Sample weights.
         """
-        raw_predictions = raw_predictions.ravel()
+        if len(y.shape) == 1:
+            raw_predictions = raw_predictions.ravel()
+
         diff = y - raw_predictions
-        if sample_weight is None:
-            gamma = np.percentile(np.abs(diff), self.alpha * 100)
+        if len(y.shape) == 1:
+            if sample_weight is None:
+                gamma = np.percentile(np.abs(diff), self.alpha * 100)
+            else:
+                gamma = _weighted_percentile(np.abs(diff), sample_weight,
+                                             self.alpha * 100)
+
+            gamma_mask = np.abs(diff) <= gamma
+            residual = np.empty((y.shape[0],), dtype=np.float64)
+            residual[gamma_mask] = diff[gamma_mask]
+            residual[~gamma_mask] = gamma * np.sign(diff[~gamma_mask])
+            self.gamma = gamma
         else:
-            gamma = _weighted_percentile(np.abs(diff), sample_weight,
-                                         self.alpha * 100)
-        gamma_mask = np.abs(diff) <= gamma
-        residual = np.zeros((y.shape[0],), dtype=np.float64)
-        residual[gamma_mask] = diff[gamma_mask]
-        residual[~gamma_mask] = gamma * np.sign(diff[~gamma_mask])
-        self.gamma = gamma
+            # gamma is a list equal number of outputs
+            if sample_weight is None:
+                gamma = np.percentile(np.abs(diff), self.alpha*100, axis=0)
+            else:
+                # _weighted_percentile() sort array along 1 axis. Thus retrieve gamma 1 output at a time
+                gamma = np.empty(y.shape[1])
+                for i in range(y.shape[1]):
+                    gamma[i] = _weighted_percentile(np.abs(diff[:, i]), sample_weight,
+                                                 self.alpha*100)
+
+            # gamma_mask is also multioutputs, thus shape (n_samples, n_outputs)
+            gamma_mask = np.empty_like(y, dtype=np.bool)
+            # Again, create mask 1 output at a time
+            for i in range(y.shape[1]):
+                gamma_mask[:, i] = np.abs(diff[:, i]) <= gamma[i]
+
+            residual = np.empty_like(y, dtype=np.float64)
+            residual[gamma_mask] = diff[gamma_mask]
+            # gamma[n_outputs]*diff[n_samples x n_outputs] is element-wise product.
+            # However, casting a mask will trim the array thus the above can't work.
+            # Therefore, go through every output
+            for i in range(y.shape[1]):
+                residual[~gamma_mask[:, i], i] = gamma[i]*np.sign(diff[~gamma_mask[:, i], i])
+
+            # self.gamma is a list equalling number of outputs
+            self.gamma = gamma
+
         return residual
 
     def _update_terminal_region(self, tree, terminal_regions, leaf, X, y,
-                                residual, raw_predictions, sample_weight):
+                                residual, raw_predictions, sample_weight,
+                                # Extra kwarg
+                                tb=None):
         terminal_region = np.where(terminal_regions == leaf)[0]
+        # axis=0 means take terminal_region row and all columns at that row if nD array
         sample_weight = sample_weight.take(terminal_region, axis=0)
         gamma = self.gamma
+        # print(y.shape)
+        # print(terminal_region.shape)
+        # print(raw_predictions.shape)
         diff = (y.take(terminal_region, axis=0)
                 - raw_predictions.take(terminal_region, axis=0))
-        median = _weighted_percentile(diff, sample_weight, percentile=50)
+        # Take terminal region indices of Tij too it provided
+        if tb is not None:
+            tb = tb.take(terminal_region, axis=0)
+            # Multiple samples taken, which is most likely the case,
+            # reshape Tij from shape (n_samples, n_outputs, n_bases) to (n_samples*n_outputs, n_bases),
+            # so that g can be found via g = Tij^T*bij
+            if len(tb.shape) == 3: tb = tb.reshape((-1, tb.shape[2]))
+            bij_residual = np.empty_like(diff)
+
+        # If single output
+        if len(y.shape) == 1:
+            median = _weighted_percentile(diff, sample_weight, percentile=50)
+        # Else if multioutputs
+        else:
+            # Calculate median for every output and 1 by 1
+            median = np.empty(y.shape[1])
+            for i in range(y.shape[1]):
+                median[i] = _weighted_percentile(diff[:, i], sample_weight, percentile=50)
+
+        # This is an array of shape (n_samples, n_outputs) if multioutputs,
+        # otherwise of shape (n_samples,)
         diff_minus_median = diff - median
-        tree.value[leaf, 0] = median + np.mean(
-            np.sign(diff_minus_median) *
-            np.minimum(np.abs(diff_minus_median), gamma))
+        if len(y.shape) == 1:
+            # Recall whenever Tree.value is called, value has been wrapped to a 3D array
+            # of shape (n_samples, n_outputs, max_n_classes), where max_n_classes = 1 for regression
+            tree.value[leaf, 0] = median + np.mean(
+                np.sign(diff_minus_median) *
+                np.minimum(np.abs(diff_minus_median), gamma))
+        # Else if multioutputs
+        else:
+            if tb is None:
+                # Go through every output
+                for i in range(y.shape[1]):
+                    tree.value[leaf, i] = median[i] + np.mean(
+                            np.sign(diff_minus_median[:, i])*
+                            np.minimum(np.abs(diff_minus_median[:, i]), gamma[i]))
+            else:
+                for i in range(y.shape[1]):
+                    bij_residual[:, i] = median[i] + np.mean(
+                            np.sign(diff_minus_median[:, i])*
+                            np.minimum(np.abs(diff_minus_median[:, i]), gamma[i]))
+
+                # Least squares to find g and inplace update Tree.value at this leaf
+                # res = np.linalg.lstsq(tb, bij_residual.ravel(), rcond=None)[0]
+                # print(res.shape)
+                # print(tree.value[leaf].shape)
+                tree.value[leaf, :, 0] = np.linalg.lstsq(tb, bij_residual.ravel(), rcond=None)[0]
+                del bij_residual
 
 
 class QuantileLossFunction(RegressionLossFunction):
