@@ -442,9 +442,8 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
                              "and the estimator doesn't provide one %s"
                              % self.best_estimator_)
         score = self.scorer_[self.refit] if self.multimetric_ else self.scorer_
-        # Models other than TBDT and TBRF don't accept extra arg of tb
+        # Models other than TB models don't accept extra arg of tb
         if tb is not None:
-
             return score(self.best_estimator_, X, y, tb=tb,
                          bij_novelty=bij_novelty)
         else:
@@ -696,7 +695,7 @@ class BaseSearchCV(BaseEstimator, MetaEstimatorMixin, metaclass=ABCMeta):
                               n_splits, n_candidates, n_candidates * n_splits))
 
                 # Here _fit_and_score() from _validation.py will be done.
-                # In TBDT and TBRF, tb is supplied in _fit_and_score through **fit_and_score_kwargs
+                # In TB models, tb is supplied in _fit_and_score through **fit_and_score_kwargs
                 out = parallel(delayed(_fit_and_score)(clone(base_estimator),
                                                        X, y,
                                                        train=train, test=test,

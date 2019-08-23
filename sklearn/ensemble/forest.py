@@ -769,7 +769,8 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
                 # Extra tensor basis input if predicting bij
                 tb=None,
                 realize_iter=None,
-                bij_novelty=None):
+                bij_novelty=None,
+                return_all_predictions=False):
         """Predict regression target for X.
 
         The predicted regression target of an input sample is computed as the
@@ -821,21 +822,24 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
             else:
                 y_hat = np.zeros((X.shape[0]), dtype=np.float64)
 
+        # Std of prediction is None by default and is calculated if return_all_predictions
+        self.y_hat_std = None
         # Parallel loop.
         # If doing default mean prediction.
-        # Lock is to prevent += from overlapping among different threads
-        if not self.median_predict:
+        # Lock is to prevent += from overlapping among different threads.
+        # If either return all predictions or do median prediction, then don't do mean prediction
+        if not (self.median_predict or return_all_predictions):
             lock = threading.Lock()
             Parallel(n_jobs=n_jobs, verbose=self.verbose,
                      **_joblib_parallel_args(require="sharedmem"))(
                 delayed(_accumulate_prediction)(e.predict, X, [y_hat], lock,
-                                                # Extra kwarg
+                                                # Extra kwargs
                                                 tb=tb, realize_iter=realize_iter,
                                                 bij_novelty=bij_novelty)
                 for e in self.estimators_)
             y_hat /= len(self.estimators_)
-        # Else if doing median prediction, use _append_prediction() instead, no lock required.
-        # Also using extra arg of tree index i for stacking results in last axis of y_hat
+        # Else if doing median prediction or return all predictions, use _append_prediction() instead, no lock required.
+        # Also using extra arg of tree index i for stacking results in last axis of y_hat.
         else:
             Parallel(n_jobs=n_jobs, verbose=self.verbose,
                      **_joblib_parallel_args(require="sharedmem"))(
@@ -844,7 +848,14 @@ class ForestRegressor(BaseForest, RegressorMixin, metaclass=ABCMeta):
                                                     tb=tb, realize_iter=realize_iter,
                                                 bij_novelty=bij_novelty)
                     for i, e in enumerate(self.estimators_))
-            y_hat = np.nanmedian(y_hat, axis=2, overwrite_input=True)
+            # Only calculate median if don't return all trees' predictions
+            if not return_all_predictions:
+                y_hat = np.nanmedian(y_hat, axis=-1, overwrite_input=True)
+            else:
+                self.y_hat_std = np.empty((X.shape[0], self.n_outputs_))
+                # Go through every sample and calculate std of all trees' predictions
+                for i in range(X.shape[0]):
+                    self.y_hat_std[i] = np.std(y_hat[i], axis=-1)
 
         return y_hat
 

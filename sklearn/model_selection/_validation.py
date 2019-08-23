@@ -1436,7 +1436,10 @@ def _incremental_fit_estimator(estimator, X, y, classes, train, test,
 
 def validation_curve(estimator, X, y, param_name, param_range, groups=None,
                      cv='warn', scoring=None, n_jobs=None, pre_dispatch="all",
-                     verbose=0, error_score='raise-deprecating'):
+                     verbose=0, error_score='raise-deprecating',
+                     # Extra kwargs
+                     tb=None,
+                     bij_novelty=None):
     """Validation curve.
 
     Determine training and test scores for varying parameter values.
@@ -1538,12 +1541,16 @@ def validation_curve(estimator, X, y, param_name, param_range, groups=None,
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
     scorer = check_scoring(estimator, scoring=scoring)
 
+    # Allow fit parameters to be supplied to _fit_and_score, with the keyword "tb"
+    fit_params = dict(tb=tb) if tb is not None else None
     parallel = Parallel(n_jobs=n_jobs, pre_dispatch=pre_dispatch,
                         verbose=verbose)
     out = parallel(delayed(_fit_and_score)(
         clone(estimator), X, y, scorer, train, test, verbose,
-        parameters={param_name: v}, fit_params=None, return_train_score=True,
-        error_score=error_score)
+        parameters={param_name: v}, fit_params=fit_params, return_train_score=True,
+        error_score=error_score,
+        # Extra kwarg
+        bij_novelty=bij_novelty)
         # NOTE do not change order of iteration to allow one time cv splitters
         for train, test in cv.split(X, y, groups) for v in param_range)
     out = np.asarray(out)
